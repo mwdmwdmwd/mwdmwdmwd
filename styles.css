@@ -176,3 +176,21 @@ body { min-height: 100dvh; }
   .stat-group { padding: 6px 8px; min-height: 42px; }
   .corner-btn { min-height: 46px; border-radius: 16px; padding: 6px 10px; }
 }
+
+
+.love-stat {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+}
+.love-stat > div {
+  font-size: 13px;
+  font-weight: 800;
+  margin: 0;
+}
+.fusion-btn.ready {
+  background: linear-gradient(180deg, rgba(244,114,182,0.98) 0%, rgba(236,72,153,0.98) 100%);
+  color: #fff7fb;
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.12), 0 0 18px rgba(236,72,153,0.45);
+}

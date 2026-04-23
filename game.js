@@ -3,8 +3,7 @@ const ctx = canvas.getContext('2d');
 
 const stageInfoEl = document.getElementById('stageInfo');
 const scoreInfoEl = document.getElementById('scoreInfo');
-const itemLevelInfoEl = document.getElementById('itemLevelInfo');
-const fusionInfoEl = document.getElementById('fusionInfo');
+const loveInfoEl = document.getElementById('loveInfo');
 const pauseBtn = document.getElementById('pauseBtn');
 const shopBtn = document.getElementById('shopBtn');
 const heartCountEl = document.getElementById('heartCount');
@@ -139,32 +138,18 @@ let debuffs = [];
 function updateHUD() {
   stageInfoEl.textContent = `STAGE ${state.stage}`;
   scoreInfoEl.textContent = `점수 ${Math.floor(state.score)}`;
+  if (loveInfoEl) loveInfoEl.textContent = `사랑 ${state.totalLove}`;
   heartCountEl.textContent = String(state.hearts);
-  const canOpenShop = state.hearts >= 5 && state.shopCharge >= 5 && !['choose','love','gameover1','gameover2','start','shop','status','paused','fusion'].includes(state.status);
+
+  const blocked = ['choose','love','gameover1','gameover2','start','shop','status','paused','fusion'].includes(state.status);
+  const canOpenShop = state.hearts >= 5 && state.shopCharge >= 5 && !blocked;
   shopBtn.style.opacity = canOpenShop ? '1' : '0.45';
   shopBtn.style.transform = canOpenShop ? 'scale(1)' : 'scale(0.96)';
-
-  const coreParts = [];
-  if (state.itemLevels.triangle > 0) coreParts.push(`△ Lv${state.itemLevels.triangle}`);
-  if (state.itemLevels.long > 0) coreParts.push(`━ Lv${state.itemLevels.long}`);
-  if (state.itemLevels.vlaser > 0) coreParts.push(`│⚡ Lv${state.itemLevels.vlaser}`);
-  if (state.itemLevels.hlaser > 0) coreParts.push(`─⚡ Lv${state.itemLevels.hlaser}`);
-  itemLevelInfoEl.textContent = coreParts.length ? coreParts.join('  ') : '코어 없음';
-
-  const fusionParts = [];
-  if (state.upgrades.crit > 0) fusionParts.push(`치명 ${state.upgrades.crit * 5}%`);
-  if (state.upgrades.attack > 0) fusionParts.push(`공격 +${(state.upgrades.attack * 0.25).toFixed(2)}`);
-  if (state.upgrades.maxBallBonus > 0) fusionParts.push(`최대공 +${state.upgrades.maxBallBonus}`);
-  if (state.upgrades.giantBall > 0) fusionParts.push(`거대공 Lv${state.upgrades.giantBall}`);
-  if (state.upgrades.speed > 0) fusionParts.push(`속도 +${(state.upgrades.speed * 0.5).toFixed(1)}`);
-  if (state.upgrades.leftDrone > 0) fusionParts.push(`좌드론 Lv${state.upgrades.leftDrone}`);
-  if (state.upgrades.rightDrone > 0) fusionParts.push(`우드론 Lv${state.upgrades.rightDrone}`);
-  if (state.upgrades.shield > 0) fusionParts.push(`실드 ${state.upgrades.shield}`);
-  if (mainFusionText() !== '융합 없음') fusionParts.push(mainFusionText().replace('융합: ', ''));
-  fusionInfoEl.textContent = fusionParts.length ? fusionParts.join(' · ') : '융합 없음';
-
   if (state.hearts >= 5) shopBtn.classList.remove('disabled');
   else shopBtn.classList.add('disabled');
+
+  const canFuse = eligibleFusionDefs().some((def) => !state.fusionRegistry[def.id]);
+  fusionBtn.classList.toggle('ready', canFuse);
 }
 
 
@@ -296,7 +281,7 @@ function maxBallCount() {
 function splitCountForLevel() {
   const lv = state.itemLevels.triangle;
   if (lv <= 0) return 0;
-  return lv + 1;
+  return lv + 1 + (state.upgrades.maxBallBonus || 0);
 }
 function lightningCount(lv) {
   if (lv <= 0) return 0;
@@ -612,6 +597,14 @@ function closeOverlay() {
   overlayEl.innerHTML = '';
 }
 
+function startRun(targetX = paddle.x + paddle.width / 2, targetY = BRICK.top) {
+  closeOverlay();
+  state.status = 'playing';
+  if (balls.some((b) => b.held)) {
+    launchHeldBalls(targetX, targetY);
+  }
+}
+
 function showStartOverlay() {
   state.status = 'start';
   openOverlay(`
@@ -626,8 +619,7 @@ function showStartOverlay() {
     </div>
   `);
   document.getElementById('startRunBtn').onclick = () => {
-    closeOverlay();
-    state.status = 'playing';
+    startRun(paddle.x + paddle.width / 2, BRICK.top);
   };
 }
 
@@ -673,7 +665,7 @@ function offerPreview(offer) {
     }
     case 'addBall': {
       const cur = maxBallCount();
-      return `현재 최대 ${cur}개 → ${cur + 1}개 (성공 시)`;
+      return `현재 최대 ${cur}개 → ${cur + 1}개`;
     }
     case 'giantBall': {
       return '현재 공 중 하나가 2배, 이미 모두 2배면 하나가 3배';
@@ -728,7 +720,7 @@ function shopPool() {
   return [
     { key: 'crit', cost: 5, title: '치명타 +5%', desc: '공의 치명타 확률이 5% 증가', apply: () => state.upgrades.crit += 1 },
     { key: 'attack', cost: 5, title: '공격력 +0.25', desc: '공격력이 0.25 증가', apply: () => state.upgrades.attack += 1 },
-    { key: 'addBall', cost: 5, title: '최대 공 +1 (25%)', desc: '25% 확률로 최대 공 개수가 1 증가', apply: () => tryIncreaseMaxBall() },
+    { key: 'addBall', cost: 5, title: '최대 공 +1', desc: '세모가 있는 패들 반사 시 최대 공 한도가 1 증가한 상태로 적용', apply: () => tryIncreaseMaxBall() },
     { key: 'speed', cost: 5, title: '속도 +0.5', desc: '공 기본 속도 +0.5', apply: () => state.upgrades.speed += 1 },
     { key: 'giantBall', cost: 10, title: '거대 공', desc: '현재 공 중 랜덤 1개를 2배로, 이미 모두 2배면 1개를 3배로', apply: () => upgradeRandomBallSize() },
     { key: 'clearBottomRows', cost: 10, title: '아래 2줄 삭제', desc: '패들에 가장 가까운 2줄을 제거 (보스 제외)', apply: () => clearBottomRows() },
@@ -1201,9 +1193,10 @@ function spawnFusionMissiles() {
   const now = nowMs();
   if (now - state.lastFusionMissileAt < 500) return;
   state.lastFusionMissileAt = now;
-  const y = paddle.y - 28;
-  const leftX = paddle.x + paddle.width / 2 - 20;
-  const rightX = paddle.x + paddle.width / 2 + 20;
+  const y = paddle.y - 24;
+  const inset = Math.min(12, paddle.width * 0.08);
+  const leftX = paddle.x + inset;
+  const rightX = paddle.x + paddle.width - inset;
   const dmg = missileDamage();
   state.missiles.push({ x: leftX, y, vx: 0, vy: -6, dmg, color: '#38bdf8', fusion: 'missile' });
   state.missiles.push({ x: rightX, y, vx: 0, vy: -6, dmg, color: '#38bdf8', fusion: 'missile' });
@@ -1231,7 +1224,7 @@ function updateBarrier(dt) {
     state.barrierUntil = now + barrierDurationMs();
   }
   if (now < state.barrierUntil) {
-    const y = paddle.y - 16;
+    const y = paddle.y - 38;
     const dmg = state.fusionLevels.barrier * (dt / 1000);
     bricks.filter((b) => !b.destroyed && b.type !== 'boss' && y >= b.y && y <= b.y + b.height).forEach((brick) => damageBrick(brick, dmg, true));
     const boss = bricks.find((b) => !b.destroyed && b.type === 'boss');
@@ -1242,6 +1235,34 @@ function updateBarrier(dt) {
 function maybeClearDiseaseBall() {
   if (state.diseaseBallUid == null) return;
   if (!balls.some((b) => b.uid === state.diseaseBallUid)) state.diseaseBallUid = null;
+}
+
+function armDiseaseOnBall(ball) {
+  if (!state.diseaseArmed) return false;
+  if (state.diseaseBallUid != null) return false;
+  if (!ball || isGiantBall(ball) || ball.disease) return false;
+  ball.disease = true;
+  state.diseaseArmed = false;
+  state.diseaseBallUid = ball.uid;
+  addFloatingText('질병 공', ball.x, ball.y - 12, '#86efac', 14);
+  return true;
+}
+
+function activeNormalBallCount(list = balls) {
+  return list.filter((b) => !isGiantBall(b)).length;
+}
+
+function spawnSeedBallFromGiant(sourceBall, outList) {
+  if (state.itemLevels.triangle <= 0) return false;
+  if (activeNormalBallCount(balls) > 0 || activeNormalBallCount(outList) > 0) return false;
+  if ((outList.length || balls.length) >= maxBallCount()) return false;
+  const angle = Math.atan2(sourceBall.vy, sourceBall.vx) + (Math.random() < 0.5 ? -0.32 : 0.32);
+  const seed = makeBall(sourceBall.x, sourceBall.y, angle);
+  seed.skipSplitUntil = nowMs() + 250;
+  outList.push(seed);
+  addFloatingText('씨앗 공', seed.x, seed.y - 12, '#fde68a', 13);
+  armDiseaseOnBall(seed);
+  return true;
 }
 
 function critDamage(base) {
@@ -1312,13 +1333,9 @@ function spawnSelfSplit(ball) {
 }
 
 function tryIncreaseMaxBall() {
-  if (Math.random() < 0.25) {
-    state.upgrades.maxBallBonus = (state.upgrades.maxBallBonus || 0) + 1;
-    addFloatingText('최대 공 증가!', paddle.x + paddle.width / 2, paddle.y - 24, '#93c5fd', 15);
-    updateHUD();
-  } else {
-    addFloatingText('꽝!', paddle.x + paddle.width / 2, paddle.y - 24, '#fca5a5', 15);
-  }
+  state.upgrades.maxBallBonus = (state.upgrades.maxBallBonus || 0) + 1;
+  addFloatingText('최대 공 증가!', paddle.x + paddle.width / 2, paddle.y - 24, '#93c5fd', 15);
+  updateHUD();
 }
 
 function addNewRow() {
@@ -1502,10 +1519,17 @@ function updateBalls(dt) {
 
     if (triZone && circleRectCollision(ball, triZone) && ball.vy > 0) {
       const allowed = Math.max(1, maxBallCount() - (balls.length - 1));
-      if (allowed > 1) next.push(...splitBall(ball, Math.min(triSplitCount, allowed)));
-      else {
+      if (allowed > 1) {
+        const spawned = splitBall(ball, Math.min(triSplitCount, allowed));
+        if (state.diseaseArmed) {
+          const host = spawned.find((b) => !isGiantBall(b));
+          if (host) armDiseaseOnBall(host);
+        }
+        next.push(...spawned);
+      } else {
         ball.vy *= -1;
         ball.y = paddle.y - ball.r - 1;
+        armDiseaseOnBall(ball);
         next.push(ball);
       }
       continue;
@@ -1519,13 +1543,11 @@ function updateBalls(dt) {
       ball.vx = Math.sin(angle) * speed;
       ball.vy = -Math.abs(Math.cos(angle) * speed);
       ball.y = paddle.y - ball.r - 1;
-      if (!isGiantBall(ball) && state.diseaseArmed && !ball.disease) {
-        ball.disease = true;
-        state.diseaseArmed = false;
-        state.diseaseBallUid = ball.uid;
-        addFloatingText('질병 공', ball.x, ball.y - 12, '#86efac', 14);
-      }
+      armDiseaseOnBall(ball);
       next.push(ball);
+      if (isGiantBall(ball)) {
+        spawnSeedBallFromGiant(ball, next);
+      }
       continue;
     }
 
@@ -1858,8 +1880,9 @@ function drawPaddle() {
     ctx.fill();
     if (state.fusionLevels.missile > 0) {
       ctx.fillStyle = '#38bdf8';
-      roundRect(paddle.x + paddle.width / 2 - 28, paddle.y - 19, 10, 20, 3, '#38bdf8', null);
-      roundRect(paddle.x + paddle.width / 2 + 18, paddle.y - 19, 10, 20, 3, '#38bdf8', null);
+      const inset = Math.min(12, paddle.width * 0.08);
+      roundRect(paddle.x + inset - 5, paddle.y - 19, 10, 20, 3, '#38bdf8', null);
+      roundRect(paddle.x + paddle.width - inset - 5, paddle.y - 19, 10, 20, 3, '#38bdf8', null);
     }
   }
 }
@@ -1947,7 +1970,7 @@ function drawBeams() {
     ctx.globalAlpha = 1;
   });
   if (now < state.barrierUntil && state.fusionLevels.barrier > 0) {
-    const y = paddle.y - 16;
+    const y = paddle.y - 38;
     ctx.strokeStyle = '#c4b5fd';
     ctx.lineWidth = 10;
     ctx.beginPath();
@@ -2063,8 +2086,7 @@ function handleTap(clientX, clientY) {
     return;
   }
   if (state.status === 'start') {
-    closeOverlay();
-    state.status = 'playing';
+    startRun(pos.x, pos.y);
     return;
   }
   if (balls.some((b) => b.held)) {
