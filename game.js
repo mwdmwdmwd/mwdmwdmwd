@@ -9,11 +9,12 @@ const pauseBtn = document.getElementById('pauseBtn');
 const shopBtn = document.getElementById('shopBtn');
 const heartCountEl = document.getElementById('heartCount');
 const statusBtn = document.getElementById('statusBtn');
+const fusionBtn = document.getElementById('fusionBtn');
 const overlayEl = document.getElementById('overlay');
 
 const W = canvas.width;
 const H = canvas.height;
-const STORAGE_KEY = 'yumi_brick_breaker_stage_shop_v141_allfix';
+const STORAGE_KEY = 'yumi_brick_breaker_stage_shop_v141_r4fusion';
 
 const THEMES = [
   { top: '#1e1b4b', bottom: '#0f172a', block: '#f472b6', number: '#fbcfe8', boss: '#fb7185', accent: '#f9a8d4', line: '#fdf2f8' },
@@ -78,17 +79,41 @@ const state = {
   rerollCost: 1,
   heartCycleProgress: 0,
   heartScheduledRows: [],
+  firstCoreGranted: false,
+  diseaseArmed: false,
+  diseaseBallUid: null,
+  lastFusionMissileAt: 0,
+  lastFusionNuclearAt: 0,
+  lastFusionBarrierAt: 0,
+  barrierUntil: 0,
+  returnToShopAfterFusion: false,
+  pendingInstantFusion: false,
   itemLevels: {
     triangle: 0,
     long: 0,
     vlaser: 0,
     hlaser: 0,
   },
+  fusionLevels: {
+    disease: 0,
+    missile: 0,
+    fshield: 0,
+    nuclear: 0,
+    barrier: 0,
+    laserboost: 0,
+  },
+  fusionRegistry: {
+    disease: false,
+    missile: false,
+    fshield: false,
+    nuclear: false,
+    barrier: false,
+    laserboost: false,
+  },
   upgrades: {
     crit: 0,
     attack: 0,
     maxBallBonus: 0,
-    bomb: 0,
     giantBall: 0,
     speed: 0,
     leftDrone: 0,
@@ -115,7 +140,7 @@ function updateHUD() {
   stageInfoEl.textContent = `STAGE ${state.stage}`;
   scoreInfoEl.textContent = `점수 ${Math.floor(state.score)}`;
   heartCountEl.textContent = String(state.hearts);
-  const canOpenShop = state.hearts >= 5 && state.shopCharge >= 5 && !['choose','love','gameover1','gameover2','start','shop','status','paused'].includes(state.status);
+  const canOpenShop = state.hearts >= 5 && state.shopCharge >= 5 && !['choose','love','gameover1','gameover2','start','shop','status','paused','fusion'].includes(state.status);
   shopBtn.style.opacity = canOpenShop ? '1' : '0.45';
   shopBtn.style.transform = canOpenShop ? 'scale(1)' : 'scale(0.96)';
 
@@ -130,12 +155,12 @@ function updateHUD() {
   if (state.upgrades.crit > 0) fusionParts.push(`치명 ${state.upgrades.crit * 5}%`);
   if (state.upgrades.attack > 0) fusionParts.push(`공격 +${(state.upgrades.attack * 0.25).toFixed(2)}`);
   if (state.upgrades.maxBallBonus > 0) fusionParts.push(`최대공 +${state.upgrades.maxBallBonus}`);
-  if (state.upgrades.bomb > 0) fusionParts.push(`폭탄 Lv${state.upgrades.bomb}`);
   if (state.upgrades.giantBall > 0) fusionParts.push(`거대공 Lv${state.upgrades.giantBall}`);
   if (state.upgrades.speed > 0) fusionParts.push(`속도 +${(state.upgrades.speed * 0.5).toFixed(1)}`);
   if (state.upgrades.leftDrone > 0) fusionParts.push(`좌드론 Lv${state.upgrades.leftDrone}`);
   if (state.upgrades.rightDrone > 0) fusionParts.push(`우드론 Lv${state.upgrades.rightDrone}`);
   if (state.upgrades.shield > 0) fusionParts.push(`실드 ${state.upgrades.shield}`);
+  if (mainFusionText() !== '융합 없음') fusionParts.push(mainFusionText().replace('융합: ', ''));
   fusionInfoEl.textContent = fusionParts.length ? fusionParts.join(' · ') : '융합 없음';
 
   if (state.hearts >= 5) shopBtn.classList.remove('disabled');
@@ -166,21 +191,37 @@ function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 function rand(min, max) { return min + Math.random() * (max - min); }
 function choice(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
+
+function currentHeartPerCycleCount() {
+  if (state.stage >= 200) return 5;
+  if (state.stage >= 100) return 4;
+  return 3;
+}
+
 function pickHeartRowsPerCycle() {
   const set = new Set();
-  while (set.size < 3) set.add(1 + Math.floor(Math.random() * 5));
+  const target = Math.min(5, currentHeartPerCycleCount());
+  while (set.size < target) set.add(1 + Math.floor(Math.random() * 5));
   return [...set];
 }
 
+const FUSION_DEFS = [
+  { id: 'disease', pair: ['triangle', 'vlaser'], name: '질병' },
+  { id: 'missile', pair: ['triangle', 'hlaser'], name: '미사일' },
+  { id: 'fshield', pair: ['triangle', 'long'], name: '실드' },
+  { id: 'nuclear', pair: ['long', 'vlaser'], name: '핵융합' },
+  { id: 'barrier', pair: ['long', 'hlaser'], name: '장벽' },
+  { id: 'laserboost', pair: ['vlaser', 'hlaser'], name: '레이저 강화' },
+];
+const FUSION_NAME = Object.fromEntries(FUSION_DEFS.map((d) => [d.id, d.name]));
+const BASE_CORE_NAMES = { triangle: '세모', long: '긴 패들', vlaser: '세로 번개', hlaser: '가로 번개' };
+let BALL_UID_SEQ = 1;
+
 function mainFusionText() {
-  const i = state.itemLevels;
-  if (i.vlaser > 0 && i.hlaser > 0) return '융합: 십자 번개';
-  if (i.triangle > 0 && i.long > 0) return '융합: 와이드 스플릿';
-  if (i.triangle > 0) return '융합: 스플릿';
-  if (i.long > 0) return '융합: 와이드';
-  if (i.vlaser > 0) return '융합: 세로 번개';
-  if (i.hlaser > 0) return '융합: 가로 번개';
-  return '융합 없음';
+  const parts = Object.entries(state.fusionLevels)
+    .filter(([, lv]) => lv > 0)
+    .map(([id, lv]) => `${FUSION_NAME[id]} Lv${lv}`);
+  return parts.length ? `융합: ${parts.join(' · ')}` : '융합 없음';
 }
 
 function coreLevelText() {
@@ -192,9 +233,36 @@ function coreLevelText() {
   return entries.length ? entries.join(' · ') : '코어 없음';
 }
 
-function randomCoreType() {
-  return choice(['triangle', 'long', 'vlaser', 'hlaser']);
+function fusionDefsAvailable() {
+  return FUSION_DEFS.filter((d) => state.fusionRegistry[d.id]);
 }
+
+function randomCoreType() {
+  const pool = ['triangle', 'long', 'vlaser', 'hlaser', ...fusionDefsAvailable().map((d) => d.id)];
+  return choice(pool);
+}
+
+function shieldCapacity() {
+  return Math.max(10, state.fusionLevels.fshield + 1);
+}
+
+function laserBoostDamage() {
+  return state.fusionLevels.laserboost > 0 ? state.fusionLevels.laserboost + 1 : 1;
+}
+
+function nuclearCooldownMs() { return Math.max(3000, 13000 - state.fusionLevels.nuclear * 1000); }
+function barrierCooldownMs() { return Math.max(3000, 13000 - state.fusionLevels.barrier * 1000); }
+function barrierDurationMs() { return 1000 + Math.max(0, state.fusionLevels.barrier - 1) * 200; }
+function missileDamage() { return state.fusionLevels.missile * 0.5; }
+function diseaseDps() { return state.fusionLevels.disease; }
+function shieldFusionCap() { return state.fusionLevels.fshield + 1; }
+function coreDisplayName(type) { return BASE_CORE_NAMES[type] || FUSION_NAME[type] || type; }
+
+function getFusionDefByPair(a, b) {
+  const pair = [a, b].sort().join('|');
+  return FUSION_DEFS.find((d) => d.pair.slice().sort().join('|') === pair) || null;
+}
+
 
 function spawnCoreDropFromBrick(brick) {
   items.push({
@@ -247,9 +315,7 @@ function isGiantBall(ball) {
   return ball.r > BALL_RADIUS * 1.5;
 }
 
-function bombSplashDamage() {
-  return 1 + Math.max(0, state.upgrades.bomb || 0);
-}
+
 
 function bossNumber() { return Math.floor(state.stage / 10); }
 function bossDebuffCount() {
@@ -318,6 +384,8 @@ function makeBall(x, y, angle = -Math.PI / 2) {
     skipSplitUntil: 0,
     bombReady: false,
     touchingIds: new Set(),
+    uid: BALL_UID_SEQ++,
+    disease: false,
   };
 }
 
@@ -475,12 +543,22 @@ function fullReset() {
   state.heartScheduledRows = pickHeartRowsPerCycle();
   state.hearts = 0;
   state.shopCharge = 0;
+  state.firstCoreGranted = false;
+  state.diseaseArmed = false;
+  state.diseaseBallUid = null;
+  state.lastFusionMissileAt = 0;
+  state.lastFusionNuclearAt = 0;
+  state.lastFusionBarrierAt = 0;
+  state.barrierUntil = 0;
+  state.returnToShopAfterFusion = false;
+  state.pendingInstantFusion = false;
   state.itemLevels = { triangle: 0, long: 0, vlaser: 0, hlaser: 0 };
+  state.fusionLevels = { disease: 0, missile: 0, fshield: 0, nuclear: 0, barrier: 0, laserboost: 0 };
+  state.fusionRegistry = { disease: false, missile: false, fshield: false, nuclear: false, barrier: false, laserboost: false };
   state.upgrades = {
     crit: 0,
     attack: 0,
     maxBallBonus: 0,
-    bomb: 0,
     giantBall: 0,
     speed: 0,
     leftDrone: 0,
@@ -597,10 +675,6 @@ function offerPreview(offer) {
       const cur = maxBallCount();
       return `현재 최대 ${cur}개 → ${cur + 1}개 (성공 시)`;
     }
-    case 'bomb': {
-      const cur = state.upgrades.bomb;
-      return cur > 0 ? `현재 활성 → 폭발 반경 강화` : '5회 반사마다 1회 폭발';
-    }
     case 'giantBall': {
       return '현재 공 중 하나가 2배, 이미 모두 2배면 하나가 3배';
     }
@@ -618,13 +692,13 @@ function offerPreview(offer) {
     }
     case 'shield': {
       const cur = shieldCount();
-      return `현재 ${cur}개 → ${Math.min(10, cur + 1)}개`;
+      return `현재 ${cur}개 → ${Math.min(shieldCapacity(), cur + 1)}개`;
     }
     case 'clearBottomRows': {
       return '패들에 가장 가까운 2줄 즉시 삭제';
     }
     case 'instantFusion': {
-      return '현재는 준비중';
+      return '두 Lv10 기본 코어를 즉시 융합 등록';
     }
     default:
       return '';
@@ -649,21 +723,22 @@ function showPauseOverlay() {
   };
 }
 
+
 function shopPool() {
   return [
     { key: 'crit', cost: 5, title: '치명타 +5%', desc: '공의 치명타 확률이 5% 증가', apply: () => state.upgrades.crit += 1 },
     { key: 'attack', cost: 5, title: '공격력 +0.25', desc: '공격력이 0.25 증가', apply: () => state.upgrades.attack += 1 },
     { key: 'addBall', cost: 5, title: '최대 공 +1 (25%)', desc: '25% 확률로 최대 공 개수가 1 증가', apply: () => tryIncreaseMaxBall() },
     { key: 'speed', cost: 5, title: '속도 +0.5', desc: '공 기본 속도 +0.5', apply: () => state.upgrades.speed += 1 },
-    { key: 'bomb', cost: 10, title: '폭탄', desc: '패들에 5번 맞을 때마다 1회 폭탄 충전, 다음 충돌 때 주변에 범위 데미지', apply: () => state.upgrades.bomb += 1 },
     { key: 'giantBall', cost: 10, title: '거대 공', desc: '현재 공 중 랜덤 1개를 2배로, 이미 모두 2배면 1개를 3배로', apply: () => upgradeRandomBallSize() },
     { key: 'clearBottomRows', cost: 10, title: '아래 2줄 삭제', desc: '패들에 가장 가까운 2줄을 제거 (보스 제외)', apply: () => clearBottomRows() },
-    { key: 'shield', cost: 10, title: '실드 +1', desc: '보스 디버프 1개를 막는 패들 실드 추가', apply: () => state.upgrades.shield = Math.min(10, (state.upgrades.shield || 0) + 1) },
+    { key: 'shield', cost: 10, title: '실드 +1', desc: '보스 디버프 1개를 막는 패들 실드 추가', apply: () => state.upgrades.shield = Math.min(shieldCapacity(), (state.upgrades.shield || 0) + 1) },
     { key: 'leftDrone', cost: 15, title: '뿅뿅이', desc: '왼쪽 하트 드론 공격력 +0.5', apply: () => state.upgrades.leftDrone += 1 },
     { key: 'rightDrone', cost: 15, title: '뾱뾱이', desc: '오른쪽 하트 드론 공격력 +0.5', apply: () => state.upgrades.rightDrone += 1 },
-    { key: 'instantFusion', cost: 15, title: '즉시 융합', desc: '다음 업데이트용 자리. 현재는 구매 시 하트 15를 돌려줍니다.', apply: () => { state.hearts += 15; addFloatingText('융합 준비중', paddle.x + paddle.width/2, paddle.y - 24, '#fde68a', 14); } },
+    { key: 'instantFusion', cost: 15, title: '즉시 융합', desc: 'Lv10 기본 코어 2개를 레벨 소모 없이 등록', apply: () => triggerInstantFusion() },
   ];
 }
+
 
 function makeShopOffers() {
   const costs = [5, 10, 15].map(() => choice([5, 10, 15]));
@@ -671,12 +746,14 @@ function makeShopOffers() {
   return costs.map((cost) => choice(pool.filter((p) => p.cost === cost)));
 }
 
-function showShopOverlay() {
+function showShopOverlay(resume = false) {
   state.previousStatus = state.status;
   state.status = 'shop';
   state.shopCharge = 0;
-  state.rerollCost = 1;
-  state.shopOffers = makeShopOffers();
+  if (!resume) {
+    state.rerollCost = 1;
+    state.shopOffers = makeShopOffers();
+  }
 
   function renderShop() {
     openOverlay(`
@@ -709,7 +786,7 @@ function showShopOverlay() {
         state.hearts -= offer.cost;
         offer.apply();
         updateHUD();
-        renderShop();
+        if (!state.pendingInstantFusion) renderShop();
       };
       wrap.appendChild(card);
     });
@@ -750,8 +827,7 @@ function showStatusOverlay() {
       <div class="kv"><span>최대 공 수</span><strong>${maxBallCount()}</strong></div>
       <div class="kv"><span>공 속도</span><strong>${ballSpeed().toFixed(1)}</strong></div>
       <div class="kv"><span>거대 공 업그레이드</span><strong>${state.upgrades.giantBall || 0}</strong></div>
-      <div class="kv"><span>폭탄 공</span><strong>${state.upgrades.bomb > 0 ? '활성' : '없음'}</strong></div>
-      <div class="kv"><span>실드</span><strong>${shieldCount()}</strong></div>
+      <div class="kv"><span>실드</span><strong>${shieldCount()} / ${shieldCapacity()}</strong></div>
       <div class="kv"><span>왼쪽 드론</span><strong>${dronePower('left').toFixed(1)}</strong></div>
       <div class="kv"><span>오른쪽 드론</span><strong>${dronePower('right').toFixed(1)}</strong></div>
       <div class="kv"><span>세모</span><strong>Lv.${state.itemLevels.triangle}</strong></div>
@@ -759,14 +835,21 @@ function showStatusOverlay() {
       <div class="kv"><span>세로 번개</span><strong>Lv.${state.itemLevels.vlaser}</strong></div>
       <div class="kv"><span>가로 번개</span><strong>Lv.${state.itemLevels.hlaser}</strong></div>
       <div class="kv"><span>융합 상태</span><strong>${mainFusionText().replace('융합: ', '')}</strong></div>
+      <div class="kv"><span>질병</span><strong>Lv.${state.fusionLevels.disease}</strong></div>
+      <div class="kv"><span>미사일</span><strong>Lv.${state.fusionLevels.missile}</strong></div>
+      <div class="kv"><span>융합 실드</span><strong>Lv.${state.fusionLevels.fshield}</strong></div>
+      <div class="kv"><span>핵융합</span><strong>Lv.${state.fusionLevels.nuclear}</strong></div>
+      <div class="kv"><span>장벽</span><strong>Lv.${state.fusionLevels.barrier}</strong></div>
+      <div class="kv"><span>레이저 강화</span><strong>Lv.${state.fusionLevels.laserboost}</strong></div>
       <div class="actions"><button id="closeStatusBtn" class="primary-btn" style="flex:1">닫기</button></div>
     </div>
   `);
   document.getElementById('closeStatusBtn').onclick = () => {
     closeOverlay();
-    state.status = (state.previousStatus === 'playing' || state.previousStatus === 'shop' || state.previousStatus === 'status') ? 'playing' : 'paused';
+    state.status = (state.previousStatus === 'playing' || state.previousStatus === 'shop' || state.previousStatus === 'status' || state.previousStatus === 'fusion') ? 'playing' : 'paused';
   };
 }
+
 
 function upgradeRandomBallSize() {
   if (!balls.length) {
@@ -787,19 +870,22 @@ function upgradeRandomBallSize() {
     addFloatingText('모든 공 최대', paddle.x + paddle.width / 2, paddle.y - 24, '#fde68a', 14);
   }
   state.upgrades.giantBall = (state.upgrades.giantBall || 0) + 1;
+}
 
 function clearBottomRows() {
   const rows = [...new Set(bricks.filter((b) => !b.destroyed && b.type !== 'boss').map((b) => b.row))].sort((a,b)=>b-a).slice(0,2);
-  let removed = 0;
   bricks.forEach((b) => {
     if (!b.destroyed && b.type !== 'boss' && rows.includes(b.row)) {
       destroyBrick(b, true);
-      removed += 1;
     }
   });
   addFloatingText(`아래 ${rows.length}줄 삭제`, paddle.x + paddle.width/2, paddle.y - 26, '#fde68a', 14);
 }
 
+function triggerInstantFusion() {
+  state.pendingInstantFusion = true;
+  state.returnToShopAfterFusion = true;
+  showFusionOverlay();
 }
 
 function spawnBossReinforcements() {
@@ -914,7 +1000,81 @@ function updateBossDebuffs() {
   });
 }
 
-function showCoreChoice() {}
+
+function eligibleFusionDefs() {
+  return FUSION_DEFS.filter((d) => state.itemLevels[d.pair[0]] >= 10 && state.itemLevels[d.pair[1]] >= 10);
+}
+
+function renderFusionCard(def, instant = false) {
+  const registered = state.fusionRegistry[def.id];
+  const eligible = state.itemLevels[def.pair[0]] >= 10 && state.itemLevels[def.pair[1]] >= 10;
+  const disabled = registered || !eligible;
+  const left = `${coreDisplayName(def.pair[0])} Lv.${state.itemLevels[def.pair[0]]}`;
+  const right = `${coreDisplayName(def.pair[1])} Lv.${state.itemLevels[def.pair[1]]}`;
+  return `
+    <div class="card">
+      <div>
+        <div class="cost">${registered ? '등록됨' : instant ? '즉시 융합' : 'Lv5 소모'}</div>
+        <h3>${def.name}</h3>
+        <div class="desc">${left} + ${right}</div>
+        <div class="desc preview">현재 Lv.${state.fusionLevels[def.id]}</div>
+      </div>
+      <button data-fusion="${def.id}" class="${disabled ? 'disabled' : ''}" ${disabled ? 'disabled' : ''}>${registered ? '완료' : '융합'}</button>
+    </div>`;
+}
+
+function performFusion(defId, instant = false) {
+  const def = FUSION_DEFS.find((d) => d.id === defId);
+  if (!def || state.fusionRegistry[def.id]) return;
+  if (!instant) {
+    if (state.itemLevels[def.pair[0]] < 10 || state.itemLevels[def.pair[1]] < 10) return;
+    state.itemLevels[def.pair[0]] = Math.max(0, state.itemLevels[def.pair[0]] - 5);
+    state.itemLevels[def.pair[1]] = Math.max(0, state.itemLevels[def.pair[1]] - 5);
+  }
+  state.fusionRegistry[def.id] = true;
+  state.fusionLevels[def.id] = Math.max(1, state.fusionLevels[def.id]);
+  updateHUD();
+  addFloatingText(`${def.name} 등록!`, paddle.x + paddle.width / 2, paddle.y - 28, '#fde68a', 15);
+  closeOverlay();
+  if (state.returnToShopAfterFusion) {
+    state.returnToShopAfterFusion = false;
+    state.pendingInstantFusion = false;
+    state.status = 'shop';
+    showShopOverlay(true);
+  } else {
+    state.status = 'playing';
+  }
+}
+
+function showFusionOverlay() {
+  state.previousStatus = state.status === 'shop' ? 'shop' : state.status;
+  state.status = 'fusion';
+  const instant = !!state.pendingInstantFusion;
+  openOverlay(`
+    <div class="modal">
+      <h2>융합</h2>
+      <p>${instant ? '즉시 융합: 레벨 소모 없이 등록' : 'Lv10 기본 코어 2개를 융합하면 각 코어 Lv5를 소모해 새 융합 코어를 등록해.'}</p>
+      <div class="cards cols-2" id="fusionCards">${FUSION_DEFS.map((d) => renderFusionCard(d, instant)).join('')}</div>
+      <div class="actions"><button id="closeFusionBtn" class="primary-btn" style="flex:1">닫기</button></div>
+    </div>
+  `);
+  document.querySelectorAll('[data-fusion]').forEach((btn) => {
+    btn.onclick = () => performFusion(btn.getAttribute('data-fusion'), instant);
+  });
+  document.getElementById('closeFusionBtn').onclick = () => {
+    closeOverlay();
+    if (state.returnToShopAfterFusion) {
+      state.returnToShopAfterFusion = false;
+      state.pendingInstantFusion = false;
+      state.status = 'shop';
+      showShopOverlay(true);
+    } else {
+      state.pendingInstantFusion = false;
+      state.status = state.previousStatus === 'paused' ? 'paused' : 'playing';
+    }
+  };
+}
+
 
 function movePaddle(clientX) {
   const rect = canvas.getBoundingClientRect();
@@ -972,8 +1132,13 @@ function destroyBrick(brick, silent = false) {
     updateHUD();
     addFloatingText('+1 ♥', brick.x + brick.width / 2, brick.y + brick.height / 2, '#fb7185', 16);
   }
-  if (!silent && brick.type !== 'heart' && brick.type !== 'boss' && Math.random() < CORE_DROP_CHANCE) {
-    spawnCoreDropFromBrick(brick);
+  if (!silent && brick.type !== 'heart' && brick.type !== 'boss') {
+    if (!state.firstCoreGranted) {
+      state.firstCoreGranted = true;
+      spawnCoreDropFromBrick(brick);
+    } else if (Math.random() < CORE_DROP_CHANCE) {
+      spawnCoreDropFromBrick(brick);
+    }
   }
   if (brick.type === 'boss') {
     state.hearts += 5;
@@ -1017,6 +1182,68 @@ function damageBrick(brick, amount, isBeam = false, textColor = null) {
   }
 }
 
+
+function infectBrick(brick) {
+  if (state.fusionLevels.disease <= 0) return;
+  brick.diseaseDps = Math.max(brick.diseaseDps || 0, diseaseDps());
+}
+
+function updateDiseaseDots(dt) {
+  if (state.fusionLevels.disease <= 0) return;
+  for (const brick of bricks) {
+    if (brick.destroyed || !brick.diseaseDps) continue;
+    damageBrick(brick, brick.diseaseDps * (dt / 1000), true);
+  }
+}
+
+function spawnFusionMissiles() {
+  if (state.fusionLevels.missile <= 0) return;
+  const now = nowMs();
+  if (now - state.lastFusionMissileAt < 500) return;
+  state.lastFusionMissileAt = now;
+  const y = paddle.y - 28;
+  const leftX = paddle.x + paddle.width / 2 - 20;
+  const rightX = paddle.x + paddle.width / 2 + 20;
+  const dmg = missileDamage();
+  state.missiles.push({ x: leftX, y, vx: 0, vy: -6, dmg, color: '#38bdf8', fusion: 'missile' });
+  state.missiles.push({ x: rightX, y, vx: 0, vy: -6, dmg, color: '#38bdf8', fusion: 'missile' });
+}
+
+function fireNuclearBeam() {
+  if (state.fusionLevels.nuclear <= 0) return;
+  const now = nowMs();
+  const cd = nuclearCooldownMs();
+  if (now - state.lastFusionNuclearAt < cd) return;
+  state.lastFusionNuclearAt = now;
+  const x = paddle.x + paddle.width / 2;
+  state.beams.push({ type: 'nuclear', x, startedAt: now, until: now + 420, color: '#93c5fd' });
+  bricks.filter((b) => !b.destroyed && b.type !== 'boss' && x >= b.x && x <= b.x + b.width).forEach((brick) => damageBrick(brick, 10, true));
+  const boss = bricks.find((b) => !b.destroyed && b.type === 'boss');
+  if (boss && x >= boss.x && x <= boss.x + boss.width) damageBrick(boss, 10, true);
+}
+
+function updateBarrier(dt) {
+  if (state.fusionLevels.barrier <= 0) return;
+  const now = nowMs();
+  const cd = barrierCooldownMs();
+  if (now - state.lastFusionBarrierAt >= cd && now >= state.barrierUntil) {
+    state.lastFusionBarrierAt = now;
+    state.barrierUntil = now + barrierDurationMs();
+  }
+  if (now < state.barrierUntil) {
+    const y = paddle.y - 16;
+    const dmg = state.fusionLevels.barrier * (dt / 1000);
+    bricks.filter((b) => !b.destroyed && b.type !== 'boss' && y >= b.y && y <= b.y + b.height).forEach((brick) => damageBrick(brick, dmg, true));
+    const boss = bricks.find((b) => !b.destroyed && b.type === 'boss');
+    if (boss && y >= boss.y && y <= boss.y + boss.height) damageBrick(boss, dmg, true);
+  }
+}
+
+function maybeClearDiseaseBall() {
+  if (state.diseaseBallUid == null) return;
+  if (!balls.some((b) => b.uid === state.diseaseBallUid)) state.diseaseBallUid = null;
+}
+
 function critDamage(base) {
   const critical = Math.random() < critChance();
   return { amount: critical ? base * 2 : base, critical };
@@ -1056,6 +1283,8 @@ function splitBall(ball, totalCount) {
       skipSplitUntil: nowMs() + 350,
       bombReady: false,
       touchingIds: new Set(),
+      uid: BALL_UID_SEQ++,
+      disease: false,
     });
   }
   addParticles(ball.x, ball.y, theme().accent, 14, 3.5);
@@ -1076,6 +1305,8 @@ function spawnSelfSplit(ball) {
     skipSplitUntil: nowMs() + 350,
     bombReady: false,
     touchingIds: new Set(),
+    uid: BALL_UID_SEQ++,
+    disease: false,
   });
   addFloatingText('+분열', ball.x, ball.y, '#fde68a', 12);
 }
@@ -1130,7 +1361,7 @@ function fireVerticalLightning() {
     const boss = bricks.find((b) => !b.destroyed && b.type === 'boss');
     if (boss) {
       const bx = boss.x + boss.width / 2;
-      if (Math.abs((BRICK.left + col * (BRICK.width + BRICK.gap) + BRICK.width / 2) - bx) < boss.width / 2) damageBrick(boss, 1, true);
+      if (Math.abs((BRICK.left + col * (BRICK.width + BRICK.gap) + BRICK.width / 2) - bx) < boss.width / 2) damageBrick(boss, laserBoostDamage(), true);
     }
   });
 }
@@ -1146,7 +1377,7 @@ function fireHorizontalLightning() {
     const boss = bricks.find((b) => !b.destroyed && b.type === 'boss');
     if (boss) {
       const by = BRICK.top + row * ROW_STEP + BRICK.height / 2;
-      if (by >= boss.y && by <= boss.y + boss.height) damageBrick(boss, 1, true);
+      if (by >= boss.y && by <= boss.y + boss.height) damageBrick(boss, laserBoostDamage(), true);
     }
   });
 }
@@ -1197,6 +1428,7 @@ function handleBallBrickCollision(ball, prevX, prevY) {
       if (!ball.touchingIds.has(brick.uid)) {
         const result = critDamage(attackPower());
         damageBrick(brick, result.amount, false, result.critical ? '#ef4444' : '#ffffff');
+        if (ball.disease) infectBrick(brick);
         if (result.critical) addFloatingText('CRIT!', brick.x + brick.width / 2, brick.y - 6, '#ef4444', 13);
       }
       continue;
@@ -1204,6 +1436,7 @@ function handleBallBrickCollision(ball, prevX, prevY) {
 
     const result = critDamage(attackPower());
     damageBrick(brick, result.amount, false, result.critical ? '#ef4444' : '#ffffff');
+    if (ball.disease) infectBrick(brick);
     if (result.critical) addFloatingText('CRIT!', brick.x + brick.width / 2, brick.y - 6, '#ef4444', 13);
 
     const overlapLeft = Math.abs(ball.x + ball.r - brick.x);
@@ -1226,13 +1459,6 @@ function handleBallBrickCollision(ball, prevX, prevY) {
       ball.vy = Math.abs(ball.vy);
     }
 
-    if (state.upgrades.bomb > 0 && ball.bombReady && brick.type !== 'boss' && !giant) {
-      explosionAt(brick.col, brick.row);
-      addFloatingText('폭탄!', brick.x + brick.width / 2, brick.y, '#fbbf24', 16);
-      addParticles(brick.x + brick.width / 2, brick.y + brick.height / 2, '#f59e0b', 22, 4.8);
-      ball.bombReady = false;
-      ball.paddleHits = 0;
-    }
 
     ball.touchingIds = currentTouching;
     return true;
@@ -1293,12 +1519,11 @@ function updateBalls(dt) {
       ball.vx = Math.sin(angle) * speed;
       ball.vy = -Math.abs(Math.cos(angle) * speed);
       ball.y = paddle.y - ball.r - 1;
-      if (!isGiantBall(ball)) {
-        ball.paddleHits += 1;
-        if (state.upgrades.bomb > 0 && ball.paddleHits > 0 && ball.paddleHits % 5 === 0) {
-          ball.bombReady = true;
-          addFloatingText('폭탄 준비!', ball.x, ball.y - 10, '#f59e0b', 14);
-        }
+      if (!isGiantBall(ball) && state.diseaseArmed && !ball.disease) {
+        ball.disease = true;
+        state.diseaseArmed = false;
+        state.diseaseBallUid = ball.uid;
+        addFloatingText('질병 공', ball.x, ball.y - 12, '#86efac', 14);
       }
       next.push(ball);
       continue;
@@ -1308,6 +1533,7 @@ function updateBalls(dt) {
     if (ball.y - ball.r <= H + 20) next.push(ball);
   }
   balls = next;
+  maybeClearDiseaseBall();
   if (!balls.length) triggerGameOver();
 }
 
@@ -1317,18 +1543,41 @@ function triggerGameOver() {
   showGameOverOverlay();
 }
 
+
 function collectCoreItem(item) {
-  const prev = state.itemLevels[item.type];
-  state.itemLevels[item.type] = Math.min(10, state.itemLevels[item.type] + 1);
-  resetPaddle();
-  updateHUD();
-  const names = { triangle: '세모', long: '긴 패들', vlaser: '세로 번개', hlaser: '가로 번개' };
-  const nextLv = state.itemLevels[item.type];
-  const tag = prev === 0 ? 'NEW' : nextLv === prev ? 'MAX' : 'Lv Up';
-  addFloatingText(tag, item.x, item.y - 10, '#ffffff', 14);
-  addFloatingText(`${names[item.type]} Lv.${nextLv}`, item.x, item.y + 8, theme().accent, 14);
-  addParticles(item.x, item.y, theme().accent, 14, 3.2);
+  const basic = Object.prototype.hasOwnProperty.call(state.itemLevels, item.type);
+  const fusion = Object.prototype.hasOwnProperty.call(state.fusionLevels, item.type);
+  if (basic) {
+    const prev = state.itemLevels[item.type];
+    state.itemLevels[item.type] = Math.min(10, state.itemLevels[item.type] + 1);
+    resetPaddle();
+    updateHUD();
+    const nextLv = state.itemLevels[item.type];
+    const tag = prev === 0 ? 'NEW' : nextLv === prev ? 'MAX' : 'Lv Up';
+    addFloatingText(tag, item.x, item.y - 10, '#ffffff', 14);
+    addFloatingText(`${coreDisplayName(item.type)} Lv.${nextLv}`, item.x, item.y + 8, theme().accent, 14);
+    addParticles(item.x, item.y, theme().accent, 14, 3.2);
+    return;
+  }
+  if (fusion) {
+    const prev = state.fusionLevels[item.type];
+    state.fusionLevels[item.type] = Math.min(10, state.fusionLevels[item.type] + 1);
+    if (item.type === 'fshield') {
+      state.upgrades.shield = Math.min(shieldCapacity(), (state.upgrades.shield || 0) + 1);
+    }
+    if (item.type === 'disease' && state.diseaseBallUid == null) {
+      state.diseaseArmed = true;
+    }
+    updateHUD();
+    const nextLv = state.fusionLevels[item.type];
+    const tag = prev === 0 ? 'NEW' : nextLv === prev ? 'MAX' : 'Lv Up';
+    addFloatingText(tag, item.x, item.y - 10, '#ffffff', 14);
+    addFloatingText(`${coreDisplayName(item.type)} Lv.${nextLv}`, item.x, item.y + 8, '#fde68a', 14);
+    addParticles(item.x, item.y, '#fde68a', 16, 3.4);
+    return;
+  }
 }
+
 
 function updateItems() {
   const now = nowMs();
@@ -1378,12 +1627,16 @@ function updateAbilities(dt) {
       spawnBossDebuffs();
     }
   }
+  spawnFusionMissiles();
+  fireNuclearBeam();
+  updateBarrier(dt);
   updateDrones(dt);
 }
 
 function updateEffects(dt) {
   const now = nowMs();
   state.beams = state.beams.filter((b) => b.until > now);
+  updateDiseaseDots(dt);
   state.floatingTexts = state.floatingTexts.filter((t) => t.until > now);
   state.particles = state.particles.filter((p) => p.until > now);
   state.particles.forEach((p) => {
@@ -1487,6 +1740,12 @@ function drawBricks() {
       ctx.restore();
     } else {
       roundRect(brick.x, brick.y, brick.width, brick.height, 6, fill, stroke);
+      if (brick.diseaseDps) {
+        ctx.save();
+        ctx.globalAlpha = 0.22;
+        roundRect(brick.x, brick.y, brick.width, brick.height, 6, '#22c55e', null);
+        ctx.restore();
+      }
     }
     ctx.textAlign = 'center';
     if (brick.type === 'heart') {
@@ -1554,6 +1813,24 @@ function drawItems() {
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
+    } else if (item.type === 'disease') {
+      ctx.fillStyle = '#22c55e';
+      ctx.beginPath(); ctx.arc(0,0,12,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle = '#bbf7d0'; ctx.stroke();
+      for (let i=0;i<4;i++){ const a=i*Math.PI/2; ctx.beginPath(); ctx.moveTo(Math.cos(a)*12, Math.sin(a)*12); ctx.lineTo(Math.cos(a)*17, Math.sin(a)*17); ctx.stroke(); }
+    } else if (item.type === 'missile') {
+      roundRect(-18,-4,36,8,4,'#38bdf8','#ffffff');
+      ctx.beginPath(); ctx.moveTo(-20,0); ctx.lineTo(-10,-8); ctx.lineTo(-10,8); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(20,0); ctx.lineTo(10,-8); ctx.lineTo(10,8); ctx.closePath(); ctx.fill();
+    } else if (item.type === 'fshield') {
+      ctx.beginPath(); ctx.moveTo(0,-16); ctx.lineTo(13,-8); ctx.lineTo(9,12); ctx.lineTo(0,17); ctx.lineTo(-9,12); ctx.lineTo(-13,-8); ctx.closePath(); ctx.fill(); ctx.stroke();
+    } else if (item.type === 'nuclear') {
+      roundRect(-6,-18,12,36,4,'#60a5fa','#ffffff');
+    } else if (item.type === 'barrier') {
+      roundRect(-24,-5,48,10,5,'#a78bfa','#ffffff');
+    } else if (item.type === 'laserboost') {
+      roundRect(-4,-18,8,36,4,'#f472b6','#ffffff');
+      roundRect(-18,-4,36,8,4,'#f472b6','#ffffff');
     }
     ctx.restore();
   }
@@ -1579,6 +1856,11 @@ function drawPaddle() {
     ctx.lineTo(paddle.x + paddle.width / 2 + 18, paddle.y);
     ctx.closePath();
     ctx.fill();
+    if (state.fusionLevels.missile > 0) {
+      ctx.fillStyle = '#38bdf8';
+      roundRect(paddle.x + paddle.width / 2 - 28, paddle.y - 19, 10, 20, 3, '#38bdf8', null);
+      roundRect(paddle.x + paddle.width / 2 + 18, paddle.y - 19, 10, 20, 3, '#38bdf8', null);
+    }
   }
 }
 
@@ -1588,21 +1870,19 @@ function drawBalls() {
     ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
     ctx.fillStyle = '#fbbf24';
     ctx.fill();
-    if (ball.r >= BALL_RADIUS * 3 - 0.1) {
+    if (ball.disease) {
+      ctx.fillStyle = '#22c55e';
+      ctx.fill();
+      ctx.strokeStyle = '#86efac';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    } else if (ball.r >= BALL_RADIUS * 3 - 0.1) {
       ctx.strokeStyle = '#60a5fa';
       ctx.lineWidth = 3;
       ctx.stroke();
     } else if (ball.r >= BALL_RADIUS * 2 - 0.1) {
       ctx.strokeStyle = '#93c5fd';
       ctx.lineWidth = 2.5;
-      ctx.stroke();
-    }
-    if (ball.bombReady) {
-      const pulse = 1 + Math.sin(nowMs() / 120) * 0.15;
-      ctx.beginPath();
-      ctx.arc(ball.x, ball.y, ball.r * 1.45 * pulse, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(245,158,11,0.95)';
-      ctx.lineWidth = 3;
       ctx.stroke();
     }
   });
@@ -1644,15 +1924,16 @@ function drawMissiles() {
   });
 }
 
+
 function drawBeams() {
   const now = nowMs();
   state.beams.forEach((beam) => {
     const progress = clamp((now - (beam.startedAt || now)) / Math.max(1, (beam.until - (beam.startedAt || now))), 0, 1);
     ctx.strokeStyle = beam.color;
-    ctx.lineWidth = 4;
-    ctx.globalAlpha = 0.78;
+    ctx.lineWidth = beam.type === 'nuclear' ? 16 : 4;
+    ctx.globalAlpha = beam.type === 'nuclear' ? 0.92 : 0.78;
     ctx.beginPath();
-    if (beam.type === 'v') {
+    if (beam.type === 'v' || beam.type === 'nuclear') {
       const endY = paddle.y + 18;
       const drawEnd = -42 + (endY + 42) * progress;
       ctx.moveTo(beam.x, -42);
@@ -1665,7 +1946,19 @@ function drawBeams() {
     ctx.stroke();
     ctx.globalAlpha = 1;
   });
+  if (now < state.barrierUntil && state.fusionLevels.barrier > 0) {
+    const y = paddle.y - 16;
+    ctx.strokeStyle = '#c4b5fd';
+    ctx.lineWidth = 10;
+    ctx.beginPath();
+    ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    ctx.strokeStyle = '#ede9fe';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
 }
+
 
 function drawParticles() {
   state.particles.forEach((p) => {
@@ -1807,12 +2100,16 @@ pauseBtn.onclick = () => {
   }
 };
 shopBtn.onclick = () => {
-  if (state.hearts < 5 || state.shopCharge < 5 || ['choose', 'love', 'gameover1', 'gameover2', 'start', 'shop', 'status', 'paused'].includes(state.status)) return;
+  if (state.hearts < 5 || state.shopCharge < 5 || ['choose', 'love', 'gameover1', 'gameover2', 'start', 'shop', 'status', 'paused', 'fusion'].includes(state.status)) return;
   showShopOverlay();
 };
 statusBtn.onclick = () => {
-  if (['choose', 'love', 'gameover1', 'gameover2', 'start'].includes(state.status)) return;
+  if (['choose', 'love', 'gameover1', 'gameover2', 'start', 'fusion'].includes(state.status)) return;
   showStatusOverlay();
+};
+fusionBtn.onclick = () => {
+  if (['choose', 'love', 'gameover1', 'gameover2', 'start', 'shop', 'status', 'paused'].includes(state.status)) return;
+  showFusionOverlay();
 };
 
 overlayEl.addEventListener('click', (e) => {
@@ -1833,6 +2130,26 @@ overlayEl.addEventListener('touchstart', (e) => {
   }
 }, { passive: false });
 
+
+function fitViewport() {
+  const topbar = document.querySelector('.topbar');
+  const topH = topbar ? topbar.getBoundingClientRect().height : 56;
+  const reserve = topH + 110;
+  const maxH = Math.max(340, window.innerHeight - reserve);
+  const maxW = Math.min(430, window.innerWidth - 16);
+  let cssW = maxW;
+  let cssH = cssW * (H / W);
+  if (cssH > maxH) {
+    cssH = maxH;
+    cssW = cssH * (W / H);
+  }
+  canvas.style.width = `${cssW}px`;
+  canvas.style.height = `${cssH}px`;
+}
+
+window.addEventListener('resize', fitViewport);
+window.addEventListener('orientationchange', () => setTimeout(fitViewport, 50));
+
 function loop(ts) {
   if (!state.lastTime) state.lastTime = ts;
   const dt = ts - state.lastTime;
@@ -1844,4 +2161,5 @@ function loop(ts) {
 
 fullReset();
 showStartOverlay();
+fitViewport();
 requestAnimationFrame(loop);
