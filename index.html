@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="유미 벽돌깨기" />
+  <title>유미 벽돌깨기</title>
+  <link rel="manifest" href="manifest.json?v=14r3" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+  <link rel="stylesheet" href="styles.css?v=14r3" />
+</head>
+<body>
+  <div class="app">
+    <div class="topbar">
+      <div class="stat-group left">
+        <div id="stageInfo">STAGE 1</div>
+        <div id="scoreInfo">점수 0</div>
+      </div>
+      <div class="stat-group center">
+        <div id="itemLevelInfo">코어 없음</div>
+        <div id="fusionInfo">융합 없음</div>
+      </div>
+      <button id="pauseBtn" class="pause-btn" aria-label="일시정지">❚❚</button>
+    </div>
+
+    <canvas id="game" width="420" height="780"></canvas>
+
+    <button id="shopBtn" class="corner-btn shop-btn" aria-label="상점">
+      <span class="heart">♥</span>
+      <span id="heartCount">0</span>
+    </button>
+
+    <button id="statusBtn" class="corner-btn status-btn" aria-label="상태">상태</button>
+
+    <div id="overlay" class="overlay hidden"></div>
+  </div>
+
+  <script src="game.js?v=14r3"></script>
+</body>
+</html>
