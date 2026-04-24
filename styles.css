@@ -111,6 +111,8 @@ body { min-height: 100dvh; }
   font-size: 22px;
 }
 .modal p { margin: 0 0 12px; line-height: 1.45; color: rgba(255,255,255,0.88); }
+.shop-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.shop-heart-line { font-size: 16px; font-weight: 700; color: #fde68a; white-space: nowrap; }
 .cards {
   display: grid;
   gap: 12px;

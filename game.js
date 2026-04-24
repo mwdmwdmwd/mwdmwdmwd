@@ -332,7 +332,7 @@ function isGiantBall(ball) {
 
 
 
-function bossNumber() { return Math.floor(state.stage / 10); }
+function bossNumber() { return state.stage >= 20 ? Math.floor(state.stage / 20) : 0; }
 function bossDebuffCount() {
   const n = bossNumber();
   if (n >= 121) return 12;
@@ -349,7 +349,7 @@ function bossReinforcementCount() {
   return 5;
 }
 function bossDebuffInterval() {
-  return bossNumber() >= 121 ? 1500 : 2000;
+  return 3000;
 }
 function strongestBlockHp() {
   const plan = currentNumberBlockPlan();
@@ -530,7 +530,7 @@ function createBossStage() {
 
 function initStage() {
   state.rowTimer = 0;
-  state.bossStage = state.stage % 10 === 0;
+  state.bossStage = state.stage >= 20 && state.stage % 20 === 0;
   state.destroyedThisStage = 0;
   if (!balls.length) {
     balls = [makeBall(paddle.x + paddle.width / 2, paddle.y - 12)];
@@ -761,11 +761,12 @@ function shopPool() {
   ];
 }
 
+function randomShopOffer() {
+  return choice(shopPool());
+}
 
 function makeShopOffers() {
-  const costs = [5, 10, 15].map(() => choice([5, 10, 15]));
-  const pool = shopPool();
-  return costs.map((cost) => choice(pool.filter((p) => p.cost === cost)));
+  return Array.from({ length: 3 }, () => randomShopOffer());
 }
 
 function showShopOverlay(resume = false) {
@@ -780,8 +781,10 @@ function showShopOverlay(resume = false) {
   function renderShop() {
     openOverlay(`
       <div class="modal">
-        <h2>하트 상점</h2>
-        <p>보유 하트 <strong>${state.hearts} ♥</strong> · 하트를 원하는 만큼 쓸 수 있어. 닫으면 다시 5개를 더 모아야 열 수 있어.</p>
+        <div class="shop-head">
+          <h2>하트 상점</h2>
+          <div class="shop-heart-line">♥ <strong>${state.hearts}</strong></div>
+        </div>
         <div class="cards cols-3" id="shopCards"></div>
         <div class="actions">
           <button id="rerollBtn" class="ghost-btn" style="flex:1">리롤 (${state.rerollCost}♥)</button>
@@ -800,7 +803,6 @@ function showShopOverlay(resume = false) {
           <h3>${offer.title}</h3>
           <div class="desc">${offer.desc}</div>
           <div class="desc preview">${offerPreview(offer)}</div>
-          <div class="desc preview">구매 후 ${Math.max(0, state.hearts - offer.cost)} ♥</div>
         </div>
         <button class="${disabled ? 'disabled' : ''}" ${disabled ? 'disabled' : ''}>구매</button>
       `;
@@ -808,8 +810,11 @@ function showShopOverlay(resume = false) {
         if (state.hearts < offer.cost) return;
         state.hearts -= offer.cost;
         offer.apply();
+        if (!state.pendingInstantFusion) {
+          state.shopOffers[i] = randomShopOffer();
+          renderShop();
+        }
         updateHUD();
-        if (!state.pendingInstantFusion) renderShop();
       };
       wrap.appendChild(card);
     });
@@ -967,7 +972,7 @@ function spawnBossDebuffs() {
   if (!count) return;
   const boss = bricks.find((b) => !b.destroyed && b.type === 'boss');
   const y = boss ? boss.y + boss.height + 12 : BRICK.top - 16;
-  const mixFusion = bossNumber() >= 300;
+  const mixFusion = bossNumber() >= 31;
   for (let i = 0; i < count; i += 1) {
     const type = mixFusion && Math.random() < 0.5 ? 'fusion' : 'base';
     debuffs.push({
@@ -1136,7 +1141,7 @@ function circleRectCollision(ball, rect) {
 
 function stageAdvance() {
   state.stage += 1;
-  state.bossStage = state.stage % 10 === 0;
+  state.bossStage = state.stage >= 20 && state.stage % 20 === 0;
   state.destroyedThisStage = 0;
   state.rowTimer = 0;
   if (state.bossStage) createBossStage();
@@ -1274,6 +1279,17 @@ function updateBarrier(dt) {
     bricks.filter((b) => !b.destroyed && b.type !== 'boss' && y >= b.y && y <= b.y + b.height).forEach((brick) => damageBrick(brick, dmg, true));
     const boss = bricks.find((b) => !b.destroyed && b.type === 'boss');
     if (boss && y >= boss.y && y <= boss.y + boss.height) damageBrick(boss, dmg, true);
+    let blocked = 0;
+    debuffs = debuffs.filter((d) => {
+      const hitBarrier = d.y + d.size >= y - 8 && d.y - d.size <= y + 8;
+      if (hitBarrier) {
+        blocked += 1;
+        addParticles(d.x, y, d.debuffType === 'fusion' ? '#7c3aed' : '#c084fc', 12, 2.8);
+        return false;
+      }
+      return true;
+    });
+    if (blocked > 0) addFloatingText(`장벽 방어 x${blocked}`, paddle.x + paddle.width / 2, y - 10, '#93c5fd', 14);
   }
 }
 
