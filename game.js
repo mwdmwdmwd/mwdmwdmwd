@@ -228,20 +228,50 @@ function randomCoreType() {
 }
 
 function shieldCapacity() {
-  return Math.max(10, state.fusionLevels.fshield + 1);
+  return 50;
 }
 
 function laserBoostDamage() {
-  return state.fusionLevels.laserboost > 0 ? state.fusionLevels.laserboost + 1 : 1;
+  return state.fusionLevels.laserboost > 0 ? state.fusionLevels.laserboost * 5 : 1;
 }
 
-function nuclearCooldownMs() { return Math.max(3000, 13000 - state.fusionLevels.nuclear * 1000); }
-function barrierCooldownMs() { return Math.max(3000, 13000 - state.fusionLevels.barrier * 1000); }
+function nuclearCooldownMs() { return 7000; }
+function barrierCooldownMs() { return state.fusionLevels.barrier > 0 ? Math.max(1000, 6000 - state.fusionLevels.barrier * 500) : 6000; }
 function barrierDurationMs() { return 1000 + Math.max(0, state.fusionLevels.barrier - 1) * 200; }
-function missileDamage() { return state.fusionLevels.missile * 0.5; }
-function diseaseDps() { return state.fusionLevels.disease; }
-function shieldFusionCap() { return state.fusionLevels.fshield + 1; }
+function missileDamage() { return state.fusionLevels.missile > 0 ? 1 + (state.fusionLevels.missile - 1) * 2 : 0; }
+function diseaseDps() { return state.fusionLevels.disease > 0 ? state.fusionLevels.disease * 5 : 0; }
+function shieldFusionCap() { return shieldCapacity(); }
 function coreDisplayName(type) { return BASE_CORE_NAMES[type] || FUSION_NAME[type] || type; }
+
+function nuclearDamage() { return state.fusionLevels.nuclear > 0 ? state.fusionLevels.nuclear * 10 : 0; }
+function barrierDps() { return state.fusionLevels.barrier > 0 ? 5 + (state.fusionLevels.barrier - 1) * 10 : 0; }
+function randomActiveFusionKey() {
+  const keys = Object.keys(state.fusionLevels).filter((k) => state.fusionLevels[k] > 0);
+  return keys.length ? choice(keys) : null;
+}
+function chooseDiseaseHost(list = balls) {
+  const active = list.filter((b) => !b.held);
+  if (!active.length) return null;
+  const giants = active.filter((b) => isGiantBall(b));
+  if (giants.length) return choice(giants);
+  const nonDisease = active.filter((b) => !b.disease);
+  return choice(nonDisease.length ? nonDisease : active);
+}
+function activateDiseaseHost(host) {
+  if (!host) return false;
+  balls.forEach((b) => { if (b.uid !== host.uid) b.disease = false; });
+  host.disease = true;
+  state.diseaseArmed = false;
+  state.diseaseBallUid = host.uid;
+  addFloatingText('질병 공', host.x, host.y - 12, '#86efac', 14);
+  return true;
+}
+function armOrActivateDisease() {
+  const host = chooseDiseaseHost();
+  if (host) return activateDiseaseHost(host);
+  state.diseaseArmed = true;
+  return false;
+}
 
 function getFusionDefByPair(a, b) {
   const pair = [a, b].sort().join('|');
@@ -751,7 +781,7 @@ function showShopOverlay(resume = false) {
     openOverlay(`
       <div class="modal">
         <h2>하트 상점</h2>
-        <p>하트를 원하는 만큼 쓸 수 있어. 닫으면 다시 5개를 더 모아야 열 수 있어.</p>
+        <p>보유 하트 <strong>${state.hearts} ♥</strong> · 하트를 원하는 만큼 쓸 수 있어. 닫으면 다시 5개를 더 모아야 열 수 있어.</p>
         <div class="cards cols-3" id="shopCards"></div>
         <div class="actions">
           <button id="rerollBtn" class="ghost-btn" style="flex:1">리롤 (${state.rerollCost}♥)</button>
@@ -770,6 +800,7 @@ function showShopOverlay(resume = false) {
           <h3>${offer.title}</h3>
           <div class="desc">${offer.desc}</div>
           <div class="desc preview">${offerPreview(offer)}</div>
+          <div class="desc preview">구매 후 ${Math.max(0, state.hearts - offer.cost)} ♥</div>
         </div>
         <button class="${disabled ? 'disabled' : ''}" ${disabled ? 'disabled' : ''}>구매</button>
       `;
@@ -848,19 +879,25 @@ function upgradeRandomBallSize() {
     addFloatingText('공 없음', paddle.x + paddle.width / 2, paddle.y - 24, '#fca5a5', 14);
     return;
   }
+  const diseaseBall = balls.find((b) => b.disease);
   const normal = balls.filter((b) => b.r < BALL_RADIUS * 2);
   const doubled = balls.filter((b) => b.r >= BALL_RADIUS * 2 && b.r < BALL_RADIUS * 3);
-  if (normal.length) {
-    const target = choice(normal);
+  let target = null;
+  if (diseaseBall) target = diseaseBall;
+  else if (normal.length) target = choice(normal);
+  else if (doubled.length) target = choice(doubled);
+  else target = choice(balls);
+
+  if (target.r < BALL_RADIUS * 2) {
     target.r = BALL_RADIUS * 2;
-    addFloatingText('거대 공!', target.x, target.y, '#93c5fd', 15);
-  } else if (doubled.length) {
-    const target = choice(doubled);
+    addFloatingText(target.disease ? '거대 질병 공!' : '거대 공!', target.x, target.y, '#93c5fd', 15);
+  } else if (target.r < BALL_RADIUS * 3) {
     target.r = BALL_RADIUS * 3;
-    addFloatingText('초거대 공!', target.x, target.y, '#60a5fa', 15);
+    addFloatingText(target.disease ? '초거대 질병 공!' : '초거대 공!', target.x, target.y, '#60a5fa', 15);
   } else {
     addFloatingText('모든 공 최대', paddle.x + paddle.width / 2, paddle.y - 24, '#fde68a', 14);
   }
+  if (target.disease) state.diseaseBallUid = target.uid;
   state.upgrades.giantBall = (state.upgrades.giantBall || 0) + 1;
 }
 
@@ -930,7 +967,9 @@ function spawnBossDebuffs() {
   if (!count) return;
   const boss = bricks.find((b) => !b.destroyed && b.type === 'boss');
   const y = boss ? boss.y + boss.height + 12 : BRICK.top - 16;
+  const mixFusion = bossNumber() >= 300;
   for (let i = 0; i < count; i += 1) {
+    const type = mixFusion && Math.random() < 0.5 ? 'fusion' : 'base';
     debuffs.push({
       x: rand(24, W - 24),
       y,
@@ -938,7 +977,8 @@ function spawnBossDebuffs() {
       vx: rand(-0.6, 0.6),
       spin: rand(-0.09, 0.09),
       rot: rand(0, Math.PI * 2),
-      size: 18 + Math.min(8, count * 0.35)
+      size: 18 + Math.min(8, count * 0.35),
+      debuffType: type,
     });
   }
   addFloatingText(`디버프 x${count}`, W / 2, Math.max(40, y), '#c084fc', 16);
@@ -950,7 +990,7 @@ function randomActiveCoreKey() {
   return keys.length ? choice(keys) : null;
 }
 
-function applyBossDebuff() {
+function applyBossDebuff(kind = 'base') {
   if (shieldCount() > 0) {
     state.upgrades.shield -= 1;
     addFloatingText('실드 방어!', paddle.x + paddle.width / 2, paddle.y - 18, '#93c5fd', 15);
@@ -959,15 +999,19 @@ function applyBossDebuff() {
   const hits = bossNumber() >= 121 ? 2 : 1;
   let changed = false;
   for (let i = 0; i < hits; i += 1) {
-    const key = randomActiveCoreKey();
+    const key = kind === 'fusion' ? randomActiveFusionKey() : randomActiveCoreKey();
     if (!key) break;
-    state.itemLevels[key] = Math.max(0, state.itemLevels[key] - 1);
+    if (kind === 'fusion') {
+      state.fusionLevels[key] = Math.max(0, state.fusionLevels[key] - 1);
+    } else {
+      state.itemLevels[key] = Math.max(0, state.itemLevels[key] - 1);
+    }
     changed = true;
   }
   if (changed) {
     resetPaddle();
     updateHUD();
-    addFloatingText('코어 다운!', paddle.x + paddle.width / 2, paddle.y - 18, '#fca5a5', 15);
+    addFloatingText(kind === 'fusion' ? '융합 다운!' : '코어 다운!', paddle.x + paddle.width / 2, paddle.y - 18, '#fca5a5', 15);
   } else {
     addFloatingText('디버프 무효', paddle.x + paddle.width / 2, paddle.y - 18, '#fde68a', 14);
   }
@@ -984,7 +1028,7 @@ function updateBossDebuffs() {
   debuffs = debuffs.filter((d) => {
     const caught = d.y + d.size >= paddle.y && d.y - d.size <= paddle.y + paddle.height && d.x >= paddle.x && d.x <= paddle.x + paddle.width;
     if (caught) {
-      applyBossDebuff();
+      applyBossDebuff(d.debuffType || 'base');
       addParticles(d.x, d.y, '#c084fc', 14, 3.2);
       return false;
     }
@@ -1209,10 +1253,11 @@ function fireNuclearBeam() {
   if (now - state.lastFusionNuclearAt < cd) return;
   state.lastFusionNuclearAt = now;
   const x = paddle.x + paddle.width / 2;
+  const dmg = nuclearDamage();
   state.beams.push({ type: 'nuclear', x, startedAt: now, until: now + 420, color: '#93c5fd' });
-  bricks.filter((b) => !b.destroyed && b.type !== 'boss' && x >= b.x && x <= b.x + b.width).forEach((brick) => damageBrick(brick, 10, true));
+  bricks.filter((b) => !b.destroyed && b.type !== 'boss' && x >= b.x && x <= b.x + b.width).forEach((brick) => damageBrick(brick, dmg, true));
   const boss = bricks.find((b) => !b.destroyed && b.type === 'boss');
-  if (boss && x >= boss.x && x <= boss.x + boss.width) damageBrick(boss, 10, true);
+  if (boss && x >= boss.x && x <= boss.x + boss.width) damageBrick(boss, dmg, true);
 }
 
 function updateBarrier(dt) {
@@ -1224,8 +1269,8 @@ function updateBarrier(dt) {
     state.barrierUntil = now + barrierDurationMs();
   }
   if (now < state.barrierUntil) {
-    const y = paddle.y - 38;
-    const dmg = state.fusionLevels.barrier * (dt / 1000);
+    const y = paddle.y - 54;
+    const dmg = barrierDps() * (dt / 1000);
     bricks.filter((b) => !b.destroyed && b.type !== 'boss' && y >= b.y && y <= b.y + b.height).forEach((brick) => damageBrick(brick, dmg, true));
     const boss = bricks.find((b) => !b.destroyed && b.type === 'boss');
     if (boss && y >= boss.y && y <= boss.y + boss.height) damageBrick(boss, dmg, true);
@@ -1239,13 +1284,8 @@ function maybeClearDiseaseBall() {
 
 function armDiseaseOnBall(ball) {
   if (!state.diseaseArmed) return false;
-  if (state.diseaseBallUid != null) return false;
-  if (!ball || isGiantBall(ball) || ball.disease) return false;
-  ball.disease = true;
-  state.diseaseArmed = false;
-  state.diseaseBallUid = ball.uid;
-  addFloatingText('질병 공', ball.x, ball.y - 12, '#86efac', 14);
-  return true;
+  if (!ball || ball.disease) return false;
+  return activateDiseaseHost(ball);
 }
 
 function activeNormalBallCount(list = balls) {
@@ -1374,7 +1414,8 @@ function fireVerticalLightning() {
   const cols = randomUniqueIndexes(BRICK.cols, count);
   cols.forEach((col) => {
     state.beams.push({ type: 'v', x: BRICK.left + col * (BRICK.width + BRICK.gap) + BRICK.width / 2, startedAt: nowMs(), until: nowMs() + 320, color: '#60a5fa' });
-    bricks.filter((b) => !b.destroyed && b.type !== 'boss' && b.col === col).forEach((brick) => damageBrick(brick, 1, true));
+    const dmg = laserBoostDamage();
+    bricks.filter((b) => !b.destroyed && b.type !== 'boss' && b.col === col).forEach((brick) => damageBrick(brick, dmg, true));
     const boss = bricks.find((b) => !b.destroyed && b.type === 'boss');
     if (boss) {
       const bx = boss.x + boss.width / 2;
@@ -1390,7 +1431,8 @@ function fireHorizontalLightning() {
   const rows = randomUniqueIndexes(rowCount, count);
   rows.forEach((row) => {
     state.beams.push({ type: 'h', y: BRICK.top + row * ROW_STEP + BRICK.height / 2, startedAt: nowMs(), until: nowMs() + 320, color: '#c084fc' });
-    bricks.filter((b) => !b.destroyed && b.type !== 'boss' && b.row === row).forEach((brick) => damageBrick(brick, 1, true));
+    const dmg = laserBoostDamage();
+    bricks.filter((b) => !b.destroyed && b.type !== 'boss' && b.row === row).forEach((brick) => damageBrick(brick, dmg, true));
     const boss = bricks.find((b) => !b.destroyed && b.type === 'boss');
     if (boss) {
       const by = BRICK.top + row * ROW_STEP + BRICK.height / 2;
@@ -1441,7 +1483,7 @@ function handleBallBrickCollision(ball, prevX, prevY) {
 
     const giant = isGiantBall(ball);
 
-    if (brick.type !== 'boss' && giant) {
+    if (brick.type !== 'boss' && (giant || ball.disease)) {
       if (!ball.touchingIds.has(brick.uid)) {
         const result = critDamage(attackPower());
         damageBrick(brick, result.amount, false, result.critical ? '#ef4444' : '#ffffff');
@@ -1584,14 +1626,14 @@ function collectCoreItem(item) {
   if (fusion) {
     const prev = state.fusionLevels[item.type];
     state.fusionLevels[item.type] = Math.min(10, state.fusionLevels[item.type] + 1);
+    const nextLv = state.fusionLevels[item.type];
     if (item.type === 'fshield') {
-      state.upgrades.shield = Math.min(shieldCapacity(), (state.upgrades.shield || 0) + 1);
+      state.upgrades.shield = Math.min(shieldCapacity(), (state.upgrades.shield || 0) + nextLv);
     }
-    if (item.type === 'disease' && state.diseaseBallUid == null) {
-      state.diseaseArmed = true;
+    if (item.type === 'disease') {
+      armOrActivateDisease();
     }
     updateHUD();
-    const nextLv = state.fusionLevels[item.type];
     const tag = prev === 0 ? 'NEW' : nextLv === prev ? 'MAX' : 'Lv Up';
     addFloatingText(tag, item.x, item.y - 10, '#ffffff', 14);
     addFloatingText(`${coreDisplayName(item.type)} Lv.${nextLv}`, item.x, item.y + 8, '#fde68a', 14);
@@ -1970,7 +2012,7 @@ function drawBeams() {
     ctx.globalAlpha = 1;
   });
   if (now < state.barrierUntil && state.fusionLevels.barrier > 0) {
-    const y = paddle.y - 38;
+    const y = paddle.y - 54;
     ctx.strokeStyle = '#c4b5fd';
     ctx.lineWidth = 10;
     ctx.beginPath();
@@ -2021,8 +2063,8 @@ function drawDebuffs() {
     ctx.rotate(d.rot || 0);
     const pulse = 1 + Math.sin(nowMs() / 120 + d.x) * 0.08;
     ctx.scale(pulse, pulse);
-    ctx.fillStyle = '#a855f7';
-    ctx.strokeStyle = '#f0abfc';
+    ctx.fillStyle = d.debuffType === 'fusion' ? '#7c3aed' : '#a855f7';
+    ctx.strokeStyle = d.debuffType === 'fusion' ? '#c4b5fd' : '#f0abfc';
     ctx.lineWidth = 2.5;
 
     ctx.beginPath();
@@ -2040,11 +2082,18 @@ function drawDebuffs() {
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 2.2;
     ctx.beginPath();
-    ctx.moveTo(0, -d.size * 0.35);
-    ctx.lineTo(0, d.size * 0.15);
-    ctx.lineTo(-d.size * 0.26, -0.5);
-    ctx.moveTo(0, d.size * 0.15);
-    ctx.lineTo(d.size * 0.26, -0.5);
+    if (d.debuffType === 'fusion') {
+      ctx.moveTo(-d.size * 0.24, -d.size * 0.24);
+      ctx.lineTo(d.size * 0.24, d.size * 0.24);
+      ctx.moveTo(d.size * 0.24, -d.size * 0.24);
+      ctx.lineTo(-d.size * 0.24, d.size * 0.24);
+    } else {
+      ctx.moveTo(0, -d.size * 0.35);
+      ctx.lineTo(0, d.size * 0.15);
+      ctx.lineTo(-d.size * 0.26, -0.5);
+      ctx.moveTo(0, d.size * 0.15);
+      ctx.lineTo(d.size * 0.26, -0.5);
+    }
     ctx.stroke();
 
     ctx.restore();
