@@ -237,7 +237,6 @@ function laserBoostDamage() {
 
 function nuclearCooldownMs() { return 7000; }
 function barrierCooldownMs() { return state.fusionLevels.barrier > 0 ? Math.max(2500, 7000 - (state.fusionLevels.barrier - 1) * 500) : 7000; }
-function barrierDurationMs() { return 1000 + Math.max(0, state.fusionLevels.barrier - 1) * 200; }
 function missileDamage() { return state.fusionLevels.missile > 0 ? 1 + (state.fusionLevels.missile - 1) * 2 : 0; }
 function diseaseDps() { return state.fusionLevels.disease > 0 ? state.fusionLevels.disease * 5 : 0; }
 function shieldFusionCap() { return shieldCapacity(); }
@@ -274,7 +273,7 @@ function rayEndpointFrom(x, y, angle) {
 }
 function getBarrierGeometry() {
   const beamStartX = paddle.x + paddle.width / 2;
-  const beamStartY = paddle.y - 54;
+  const beamStartY = paddle.y - 58;
   const baseY = paddle.y;
   const angle = 15 * Math.PI / 180;
   const leftEnd = rayEndpointFrom(beamStartX, beamStartY, Math.PI - angle);
@@ -929,12 +928,17 @@ function upgradeRandomBallSize() {
     return;
   }
   const diseaseBall = balls.find((b) => b.disease);
-  const normal = balls.filter((b) => b.r < BALL_RADIUS * 2);
-  const doubled = balls.filter((b) => b.r >= BALL_RADIUS * 2 && b.r < BALL_RADIUS * 3);
+  const normal = balls.filter((b) => !b.disease && b.r < BALL_RADIUS * 2);
+  const doubled = balls.filter((b) => !b.disease && b.r >= BALL_RADIUS * 2 && b.r < BALL_RADIUS * 3);
+  const anyNormal = balls.filter((b) => b.r < BALL_RADIUS * 2);
+  const anyDoubled = balls.filter((b) => b.r >= BALL_RADIUS * 2 && b.r < BALL_RADIUS * 3);
   let target = null;
-  if (diseaseBall) target = diseaseBall;
+  if (diseaseBall && diseaseBall.r < BALL_RADIUS * 2) target = diseaseBall;
   else if (normal.length) target = choice(normal);
   else if (doubled.length) target = choice(doubled);
+  else if (!diseaseBall && anyNormal.length) target = choice(anyNormal);
+  else if (!diseaseBall && anyDoubled.length) target = choice(anyDoubled);
+  else if (diseaseBall && diseaseBall.r < BALL_RADIUS * 3) target = diseaseBall;
   else target = choice(balls);
 
   if (target.r < BALL_RADIUS * 2) {
@@ -1302,58 +1306,57 @@ function fireNuclearBeam() {
   if (now - state.lastFusionNuclearAt < cd) return;
   state.lastFusionNuclearAt = now;
   const x = paddle.x + paddle.width / 2;
+  const y1 = paddle.y + 1;
+  const y2 = -40;
   const dmg = nuclearDamage();
-  const width = BASE_PADDLE.width;
-  const half = width / 2;
-  state.beams.push({ type: 'nuclear', x, width, startedAt: now, until: now + 420, color: '#93c5fd' });
-  bricks.filter((b) => !b.destroyed && b.type !== 'boss' && x + half >= b.x && x - half <= b.x + b.width).forEach((brick) => damageBrick(brick, dmg, true));
-  const boss = bricks.find((b) => !b.destroyed && b.type === 'boss');
-  if (boss && x + half >= boss.x && x - half <= boss.x + boss.width) damageBrick(boss, dmg, true);
+  const width = BASE_PADDLE.width * 0.82;
+  const radius = width / 2;
+  state.beams.push({ type: 'nuclear', x1: x, y1, x2: x, y2, width, startedAt: now, until: now + 320, color: '#93c5fd' });
+  bricks.filter((b) => !b.destroyed).forEach((brick) => {
+    const cx = brick.x + brick.width / 2;
+    const cy = brick.y + brick.height / 2;
+    const rr = Math.hypot(brick.width, brick.height) / 2;
+    const hit = pointToSegmentDistance(cx, cy, x, y1, x, y2) <= radius + rr * 0.55;
+    if (hit) damageBrick(brick, dmg, true);
+  });
 }
 
 function updateBarrier(dt) {
   if (state.fusionLevels.barrier <= 0) return;
   const now = nowMs();
   const cd = barrierCooldownMs();
-  if (now - state.lastFusionBarrierAt >= cd && now >= state.barrierUntil) {
-    state.lastFusionBarrierAt = now;
-    state.barrierUntil = now + barrierDurationMs();
-  }
-  if (now < state.barrierUntil) {
-    const geo = getBarrierGeometry();
-    const dmg = barrierDps() * (dt / 1000);
-    const beamSegments = [
-      [geo.beamX, geo.beamY, geo.leftEnd.x, geo.leftEnd.y],
-      [geo.beamX, geo.beamY, geo.rightEnd.x, geo.rightEnd.y],
-    ];
-    const beamRadius = geo.beamWidth / 2;
-    bricks.filter((b) => !b.destroyed && b.type !== 'boss').forEach((brick) => {
-      const cx = brick.x + brick.width / 2;
-      const cy = brick.y + brick.height / 2;
-      const radius = Math.hypot(brick.width, brick.height) / 2;
-      const hit = beamSegments.some(([x1, y1, x2, y2]) => pointToSegmentDistance(cx, cy, x1, y1, x2, y2) <= beamRadius + radius * 0.55);
-      if (hit) damageBrick(brick, dmg, true);
-    });
-    const boss = bricks.find((b) => !b.destroyed && b.type === 'boss');
-    if (boss) {
-      const cx = boss.x + boss.width / 2;
-      const cy = boss.y + boss.height / 2;
-      const radius = Math.hypot(boss.width, boss.height) / 2;
-      const hit = beamSegments.some(([x1, y1, x2, y2]) => pointToSegmentDistance(cx, cy, x1, y1, x2, y2) <= beamRadius + radius * 0.55);
-      if (hit) damageBrick(boss, dmg, true);
+  if (now - state.lastFusionBarrierAt < cd) return;
+  state.lastFusionBarrierAt = now;
+
+  const geo = getBarrierGeometry();
+  const dmg = barrierDps();
+  const beamSegments = [
+    [geo.beamX, geo.beamY, geo.leftEnd.x, geo.leftEnd.y],
+    [geo.beamX, geo.beamY, geo.rightEnd.x, geo.rightEnd.y],
+  ];
+  const beamRadius = geo.beamWidth / 2;
+  state.beams.push({ type: 'barrier', x1: geo.beamX, y1: geo.beamY, x2: geo.leftEnd.x, y2: geo.leftEnd.y, width: geo.beamWidth, startedAt: now, until: now + 260, color: '#c4b5fd' });
+  state.beams.push({ type: 'barrier', x1: geo.beamX, y1: geo.beamY, x2: geo.rightEnd.x, y2: geo.rightEnd.y, width: geo.beamWidth, startedAt: now, until: now + 260, color: '#c4b5fd' });
+
+  bricks.filter((b) => !b.destroyed).forEach((brick) => {
+    const cx = brick.x + brick.width / 2;
+    const cy = brick.y + brick.height / 2;
+    const radius = Math.hypot(brick.width, brick.height) / 2;
+    const hit = beamSegments.some(([x1, y1, x2, y2]) => pointToSegmentDistance(cx, cy, x1, y1, x2, y2) <= beamRadius + radius * 0.55);
+    if (hit) damageBrick(brick, dmg, true);
+  });
+
+  let blocked = 0;
+  debuffs = debuffs.filter((d) => {
+    const hitBarrier = beamSegments.some(([x1, y1, x2, y2]) => pointToSegmentDistance(d.x, d.y, x1, y1, x2, y2) <= beamRadius + d.size * 0.8);
+    if (hitBarrier) {
+      blocked += 1;
+      addParticles(d.x, d.y, d.debuffType === 'fusion' ? '#7c3aed' : '#c084fc', 12, 2.8);
+      return false;
     }
-    let blocked = 0;
-    debuffs = debuffs.filter((d) => {
-      const hitBarrier = beamSegments.some(([x1, y1, x2, y2]) => pointToSegmentDistance(d.x, d.y, x1, y1, x2, y2) <= beamRadius + d.size * 0.8);
-      if (hitBarrier) {
-        blocked += 1;
-        addParticles(d.x, d.y, d.debuffType === 'fusion' ? '#7c3aed' : '#c084fc', 12, 2.8);
-        return false;
-      }
-      return true;
-    });
-    if (blocked > 0) addFloatingText(`장벽 방어 x${blocked}`, geo.beamX, geo.beamY - 10, '#93c5fd', 14);
-  }
+    return true;
+  });
+  if (blocked > 0) addFloatingText(`장벽 방어 x${blocked}`, geo.beamX, geo.beamY - 10, '#93c5fd', 14);
 }
 
 function maybeClearDiseaseBall() {
@@ -2077,7 +2080,12 @@ function drawBeams() {
     ctx.lineWidth = beam.width || (beam.type === 'nuclear' ? 16 : 4);
     ctx.globalAlpha = beam.type === 'nuclear' ? 0.92 : 0.78;
     ctx.beginPath();
-    if (beam.type === 'v' || beam.type === 'nuclear') {
+    if (beam.x1 != null) {
+      const ex = beam.x1 + (beam.x2 - beam.x1) * progress;
+      const ey = beam.y1 + (beam.y2 - beam.y1) * progress;
+      ctx.moveTo(beam.x1, beam.y1);
+      ctx.lineTo(ex, ey);
+    } else if (beam.type === 'v') {
       const endY = paddle.y + 18;
       const drawEnd = -42 + (endY + 42) * progress;
       ctx.moveTo(beam.x, -42);
@@ -2090,7 +2098,7 @@ function drawBeams() {
     ctx.stroke();
     ctx.globalAlpha = 1;
   });
-  if (now < state.barrierUntil && state.fusionLevels.barrier > 0) {
+  if (state.fusionLevels.barrier > 0) {
     const geo = getBarrierGeometry();
     ctx.strokeStyle = '#a78bfa';
     ctx.lineWidth = geo.pillarWidth;
@@ -2103,20 +2111,6 @@ function drawBeams() {
     ctx.beginPath();
     ctx.arc(geo.beamX, geo.beamY, geo.beamWidth * 0.6, 0, Math.PI * 2);
     ctx.fill();
-
-    ctx.strokeStyle = '#c4b5fd';
-    ctx.lineWidth = geo.beamWidth;
-    ctx.beginPath();
-    ctx.moveTo(geo.beamX, geo.beamY); ctx.lineTo(geo.leftEnd.x, geo.leftEnd.y);
-    ctx.moveTo(geo.beamX, geo.beamY); ctx.lineTo(geo.rightEnd.x, geo.rightEnd.y);
-    ctx.stroke();
-
-    ctx.strokeStyle = '#ede9fe';
-    ctx.lineWidth = Math.max(3, geo.beamWidth * 0.35);
-    ctx.beginPath();
-    ctx.moveTo(geo.beamX, geo.beamY); ctx.lineTo(geo.leftEnd.x, geo.leftEnd.y);
-    ctx.moveTo(geo.beamX, geo.beamY); ctx.lineTo(geo.rightEnd.x, geo.rightEnd.y);
-    ctx.stroke();
   }
 }
 
