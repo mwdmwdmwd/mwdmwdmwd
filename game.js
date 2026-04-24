@@ -237,6 +237,11 @@ function laserBoostDamage() {
 
 function nuclearCooldownMs() { return 7000; }
 function barrierCooldownMs() { return state.fusionLevels.barrier > 0 ? Math.max(2500, 7000 - (state.fusionLevels.barrier - 1) * 500) : 7000; }
+function barrierDurationMs() {
+  const lv = state.fusionLevels.barrier || 0;
+  if (lv <= 0) return 0;
+  return Math.min(500, Math.ceil(lv / 2) * 100);
+}
 function missileDamage() { return state.fusionLevels.missile > 0 ? 1 + (state.fusionLevels.missile - 1) * 2 : 0; }
 function diseaseDps() { return state.fusionLevels.disease > 0 ? state.fusionLevels.disease * 5 : 0; }
 function shieldFusionCap() { return shieldCapacity(); }
@@ -272,17 +277,17 @@ function rayEndpointFrom(x, y, angle) {
   return { x: x + dx * t, y: y + dy * t };
 }
 function getBarrierGeometry() {
-  const beamStartX = paddle.x + paddle.width / 2;
-  const beamStartY = paddle.y - 58;
-  const baseY = paddle.y;
+  const baseX = paddle.x + paddle.width / 2;
+  const baseY = paddle.y - 24; // triangle apex
+  const beamY = baseY - 34;
   const angle = 15 * Math.PI / 180;
-  const leftEnd = rayEndpointFrom(beamStartX, beamStartY, Math.PI - angle);
-  const rightEnd = rayEndpointFrom(beamStartX, beamStartY, -angle);
+  const leftEnd = rayEndpointFrom(baseX, beamY, Math.PI + angle); // up-left
+  const rightEnd = rayEndpointFrom(baseX, beamY, -angle); // up-right
   return {
-    baseX: beamStartX,
+    baseX,
     baseY,
-    beamX: beamStartX,
-    beamY: beamStartY,
+    beamX: baseX,
+    beamY,
     leftEnd,
     rightEnd,
     beamWidth: 10,
@@ -374,7 +379,19 @@ function isGiantBall(ball) {
   return ball.r > BALL_RADIUS * 1.5;
 }
 
-
+function rescaleAllBallSpeeds() {
+  const target = ballSpeed();
+  balls.forEach((ball) => {
+    const mag = Math.hypot(ball.vx, ball.vy);
+    if (mag < 0.0001) {
+      ball.vx = 0;
+      ball.vy = -target;
+    } else {
+      ball.vx = (ball.vx / mag) * target;
+      ball.vy = (ball.vy / mag) * target;
+    }
+  });
+}
 
 function bossNumber() { return state.stage >= 10 ? Math.floor(state.stage / 10) : 0; }
 function bossDebuffCount() {
@@ -795,7 +812,7 @@ function shopPool() {
     { key: 'crit', cost: 5, title: '치명타 +5%', desc: '공의 치명타 확률이 5% 증가', apply: () => state.upgrades.crit += 1 },
     { key: 'attack', cost: 5, title: '공격력 +0.25', desc: '공격력이 0.25 증가', apply: () => state.upgrades.attack += 1 },
     { key: 'addBall', cost: 5, title: '최대 공 +1', desc: '세모가 있는 패들 반사 시 최대 공 한도가 1 증가한 상태로 적용', apply: () => tryIncreaseMaxBall() },
-    { key: 'speed', cost: 5, title: '속도 +0.5', desc: '공 기본 속도 +0.5', apply: () => state.upgrades.speed += 1 },
+    { key: 'speed', cost: 5, title: '속도 +0.5', desc: '공 기본 속도 +0.5', apply: () => { state.upgrades.speed += 1; rescaleAllBallSpeeds(); } },
     { key: 'giantBall', cost: 10, title: '거대 공', desc: '현재 공 중 랜덤 1개를 2배로, 이미 모두 2배면 1개를 3배로', apply: () => upgradeRandomBallSize() },
     { key: 'clearBottomRows', cost: 10, title: '아래 2줄 삭제', desc: '패들에 가장 가까운 2줄을 제거 (보스 제외)', apply: () => clearBottomRows() },
     { key: 'shield', cost: 10, title: '실드 +1', desc: '보스 디버프 1개를 막는 패들 실드 추가', apply: () => state.upgrades.shield = Math.min(shieldCapacity(), (state.upgrades.shield || 0) + 1) },
@@ -1335,8 +1352,9 @@ function updateBarrier(dt) {
     [geo.beamX, geo.beamY, geo.rightEnd.x, geo.rightEnd.y],
   ];
   const beamRadius = geo.beamWidth / 2;
-  state.beams.push({ type: 'barrier', x1: geo.beamX, y1: geo.beamY, x2: geo.leftEnd.x, y2: geo.leftEnd.y, width: geo.beamWidth, startedAt: now, until: now + 260, color: '#c4b5fd' });
-  state.beams.push({ type: 'barrier', x1: geo.beamX, y1: geo.beamY, x2: geo.rightEnd.x, y2: geo.rightEnd.y, width: geo.beamWidth, startedAt: now, until: now + 260, color: '#c4b5fd' });
+  const duration = barrierDurationMs();
+  state.beams.push({ type: 'barrier', x1: geo.beamX, y1: geo.beamY, x2: geo.leftEnd.x, y2: geo.leftEnd.y, width: geo.beamWidth, startedAt: now, until: now + duration, color: '#c4b5fd' });
+  state.beams.push({ type: 'barrier', x1: geo.beamX, y1: geo.beamY, x2: geo.rightEnd.x, y2: geo.rightEnd.y, width: geo.beamWidth, startedAt: now, until: now + duration, color: '#c4b5fd' });
 
   bricks.filter((b) => !b.destroyed).forEach((brick) => {
     const cx = brick.x + brick.width / 2;
@@ -2038,26 +2056,21 @@ function drawBalls() {
 function drawDrones() {
   const leftPower = dronePower('left');
   const rightPower = dronePower('right');
-  if (leftPower > 0) {
-    ctx.fillStyle = '#fb7185';
+  const drawTriDrone = (cx, cy, fill, label) => {
+    ctx.fillStyle = fill;
     ctx.beginPath();
-    ctx.arc(paddle.x + paddle.width / 2 - 24, paddle.y - 20, 8, 0, Math.PI * 2);
+    ctx.moveTo(cx, cy - 9);
+    ctx.lineTo(cx - 8, cy + 7);
+    ctx.lineTo(cx + 8, cy + 7);
+    ctx.closePath();
     ctx.fill();
     ctx.fillStyle = '#fff';
-    ctx.font = 'bold 10px sans-serif';
+    ctx.font = 'bold 9px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('♥', paddle.x + paddle.width / 2 - 24, paddle.y - 17);
-  }
-  if (rightPower > 0) {
-    ctx.fillStyle = '#f9a8d4';
-    ctx.beginPath();
-    ctx.arc(paddle.x + paddle.width / 2 + 24, paddle.y - 20, 8, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 10px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('♥', paddle.x + paddle.width / 2 + 24, paddle.y - 17);
-  }
+    ctx.fillText(label, cx, cy + 3);
+  };
+  if (leftPower > 0) drawTriDrone(paddle.x + paddle.width / 2 - 24, paddle.y - 20, '#fb7185', '▲');
+  if (rightPower > 0) drawTriDrone(paddle.x + paddle.width / 2 + 24, paddle.y - 20, '#f9a8d4', '▲');
 }
 
 function drawMissiles() {
