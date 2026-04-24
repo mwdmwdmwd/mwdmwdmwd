@@ -236,7 +236,7 @@ function laserBoostDamage() {
 }
 
 function nuclearCooldownMs() { return 7000; }
-function barrierCooldownMs() { return state.fusionLevels.barrier > 0 ? Math.max(1000, 6000 - state.fusionLevels.barrier * 500) : 6000; }
+function barrierCooldownMs() { return state.fusionLevels.barrier > 0 ? Math.max(2500, 7000 - (state.fusionLevels.barrier - 1) * 500) : 7000; }
 function barrierDurationMs() { return 1000 + Math.max(0, state.fusionLevels.barrier - 1) * 200; }
 function missileDamage() { return state.fusionLevels.missile > 0 ? 1 + (state.fusionLevels.missile - 1) * 2 : 0; }
 function diseaseDps() { return state.fusionLevels.disease > 0 ? state.fusionLevels.disease * 5 : 0; }
@@ -245,6 +245,51 @@ function coreDisplayName(type) { return BASE_CORE_NAMES[type] || FUSION_NAME[typ
 
 function nuclearDamage() { return state.fusionLevels.nuclear > 0 ? state.fusionLevels.nuclear * 10 : 0; }
 function barrierDps() { return state.fusionLevels.barrier > 0 ? 5 + (state.fusionLevels.barrier - 1) * 10 : 0; }
+
+function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq <= 0.0001) return Math.hypot(px - x1, py - y1);
+  let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
+  t = clamp(t, 0, 1);
+  const cx = x1 + t * dx;
+  const cy = y1 + t * dy;
+  return Math.hypot(px - cx, py - cy);
+}
+function rayEndpointFrom(x, y, angle) {
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+  const ts = [];
+  if (Math.abs(dx) > 0.0001) {
+    const tx = dx > 0 ? (W - x) / dx : (0 - x) / dx;
+    if (tx > 0) ts.push(tx);
+  }
+  if (Math.abs(dy) > 0.0001) {
+    const ty = dy > 0 ? (H - y) / dy : (0 - y) / dy;
+    if (ty > 0) ts.push(ty);
+  }
+  const t = ts.length ? Math.min(...ts) : 0;
+  return { x: x + dx * t, y: y + dy * t };
+}
+function getBarrierGeometry() {
+  const beamStartX = paddle.x + paddle.width / 2;
+  const beamStartY = paddle.y - 54;
+  const baseY = paddle.y;
+  const angle = 15 * Math.PI / 180;
+  const leftEnd = rayEndpointFrom(beamStartX, beamStartY, Math.PI - angle);
+  const rightEnd = rayEndpointFrom(beamStartX, beamStartY, -angle);
+  return {
+    baseX: beamStartX,
+    baseY,
+    beamX: beamStartX,
+    beamY: beamStartY,
+    leftEnd,
+    rightEnd,
+    beamWidth: 10,
+    pillarWidth: 8,
+  };
+}
 function randomActiveFusionKey() {
   const keys = Object.keys(state.fusionLevels).filter((k) => state.fusionLevels[k] > 0);
   return keys.length ? choice(keys) : null;
@@ -332,7 +377,7 @@ function isGiantBall(ball) {
 
 
 
-function bossNumber() { return state.stage >= 20 ? Math.floor(state.stage / 20) : 0; }
+function bossNumber() { return state.stage >= 10 ? Math.floor(state.stage / 10) : 0; }
 function bossDebuffCount() {
   const n = bossNumber();
   if (n >= 121) return 12;
@@ -530,7 +575,7 @@ function createBossStage() {
 
 function initStage() {
   state.rowTimer = 0;
-  state.bossStage = state.stage >= 20 && state.stage % 20 === 0;
+  state.bossStage = state.stage >= 10 && state.stage % 10 === 0;
   state.destroyedThisStage = 0;
   if (!balls.length) {
     balls = [makeBall(paddle.x + paddle.width / 2, paddle.y - 12)];
@@ -802,7 +847,6 @@ function showShopOverlay(resume = false) {
           <div class="cost">${offer.cost} ♥</div>
           <h3>${offer.title}</h3>
           <div class="desc">${offer.desc}</div>
-          <div class="desc preview">${offerPreview(offer)}</div>
         </div>
         <button class="${disabled ? 'disabled' : ''}" ${disabled ? 'disabled' : ''}>구매</button>
       `;
@@ -972,7 +1016,7 @@ function spawnBossDebuffs() {
   if (!count) return;
   const boss = bricks.find((b) => !b.destroyed && b.type === 'boss');
   const y = boss ? boss.y + boss.height + 12 : BRICK.top - 16;
-  const mixFusion = bossNumber() >= 31;
+  const mixFusion = state.stage >= 500;
   for (let i = 0; i < count; i += 1) {
     const type = mixFusion && Math.random() < 0.5 ? 'fusion' : 'base';
     debuffs.push({
@@ -1141,7 +1185,7 @@ function circleRectCollision(ball, rect) {
 
 function stageAdvance() {
   state.stage += 1;
-  state.bossStage = state.stage >= 20 && state.stage % 20 === 0;
+  state.bossStage = state.stage >= 10 && state.stage % 10 === 0;
   state.destroyedThisStage = 0;
   state.rowTimer = 0;
   if (state.bossStage) createBossStage();
@@ -1259,10 +1303,12 @@ function fireNuclearBeam() {
   state.lastFusionNuclearAt = now;
   const x = paddle.x + paddle.width / 2;
   const dmg = nuclearDamage();
-  state.beams.push({ type: 'nuclear', x, startedAt: now, until: now + 420, color: '#93c5fd' });
-  bricks.filter((b) => !b.destroyed && b.type !== 'boss' && x >= b.x && x <= b.x + b.width).forEach((brick) => damageBrick(brick, dmg, true));
+  const width = BASE_PADDLE.width;
+  const half = width / 2;
+  state.beams.push({ type: 'nuclear', x, width, startedAt: now, until: now + 420, color: '#93c5fd' });
+  bricks.filter((b) => !b.destroyed && b.type !== 'boss' && x + half >= b.x && x - half <= b.x + b.width).forEach((brick) => damageBrick(brick, dmg, true));
   const boss = bricks.find((b) => !b.destroyed && b.type === 'boss');
-  if (boss && x >= boss.x && x <= boss.x + boss.width) damageBrick(boss, dmg, true);
+  if (boss && x + half >= boss.x && x - half <= boss.x + boss.width) damageBrick(boss, dmg, true);
 }
 
 function updateBarrier(dt) {
@@ -1274,22 +1320,39 @@ function updateBarrier(dt) {
     state.barrierUntil = now + barrierDurationMs();
   }
   if (now < state.barrierUntil) {
-    const y = paddle.y - 54;
+    const geo = getBarrierGeometry();
     const dmg = barrierDps() * (dt / 1000);
-    bricks.filter((b) => !b.destroyed && b.type !== 'boss' && y >= b.y && y <= b.y + b.height).forEach((brick) => damageBrick(brick, dmg, true));
+    const beamSegments = [
+      [geo.beamX, geo.beamY, geo.leftEnd.x, geo.leftEnd.y],
+      [geo.beamX, geo.beamY, geo.rightEnd.x, geo.rightEnd.y],
+    ];
+    const beamRadius = geo.beamWidth / 2;
+    bricks.filter((b) => !b.destroyed && b.type !== 'boss').forEach((brick) => {
+      const cx = brick.x + brick.width / 2;
+      const cy = brick.y + brick.height / 2;
+      const radius = Math.hypot(brick.width, brick.height) / 2;
+      const hit = beamSegments.some(([x1, y1, x2, y2]) => pointToSegmentDistance(cx, cy, x1, y1, x2, y2) <= beamRadius + radius * 0.55);
+      if (hit) damageBrick(brick, dmg, true);
+    });
     const boss = bricks.find((b) => !b.destroyed && b.type === 'boss');
-    if (boss && y >= boss.y && y <= boss.y + boss.height) damageBrick(boss, dmg, true);
+    if (boss) {
+      const cx = boss.x + boss.width / 2;
+      const cy = boss.y + boss.height / 2;
+      const radius = Math.hypot(boss.width, boss.height) / 2;
+      const hit = beamSegments.some(([x1, y1, x2, y2]) => pointToSegmentDistance(cx, cy, x1, y1, x2, y2) <= beamRadius + radius * 0.55);
+      if (hit) damageBrick(boss, dmg, true);
+    }
     let blocked = 0;
     debuffs = debuffs.filter((d) => {
-      const hitBarrier = d.y + d.size >= y - 8 && d.y - d.size <= y + 8;
+      const hitBarrier = beamSegments.some(([x1, y1, x2, y2]) => pointToSegmentDistance(d.x, d.y, x1, y1, x2, y2) <= beamRadius + d.size * 0.8);
       if (hitBarrier) {
         blocked += 1;
-        addParticles(d.x, y, d.debuffType === 'fusion' ? '#7c3aed' : '#c084fc', 12, 2.8);
+        addParticles(d.x, d.y, d.debuffType === 'fusion' ? '#7c3aed' : '#c084fc', 12, 2.8);
         return false;
       }
       return true;
     });
-    if (blocked > 0) addFloatingText(`장벽 방어 x${blocked}`, paddle.x + paddle.width / 2, y - 10, '#93c5fd', 14);
+    if (blocked > 0) addFloatingText(`장벽 방어 x${blocked}`, geo.beamX, geo.beamY - 10, '#93c5fd', 14);
   }
 }
 
@@ -2011,7 +2074,7 @@ function drawBeams() {
   state.beams.forEach((beam) => {
     const progress = clamp((now - (beam.startedAt || now)) / Math.max(1, (beam.until - (beam.startedAt || now))), 0, 1);
     ctx.strokeStyle = beam.color;
-    ctx.lineWidth = beam.type === 'nuclear' ? 16 : 4;
+    ctx.lineWidth = beam.width || (beam.type === 'nuclear' ? 16 : 4);
     ctx.globalAlpha = beam.type === 'nuclear' ? 0.92 : 0.78;
     ctx.beginPath();
     if (beam.type === 'v' || beam.type === 'nuclear') {
@@ -2028,15 +2091,32 @@ function drawBeams() {
     ctx.globalAlpha = 1;
   });
   if (now < state.barrierUntil && state.fusionLevels.barrier > 0) {
-    const y = paddle.y - 54;
+    const geo = getBarrierGeometry();
+    ctx.strokeStyle = '#a78bfa';
+    ctx.lineWidth = geo.pillarWidth;
+    ctx.beginPath();
+    ctx.moveTo(geo.baseX, geo.baseY);
+    ctx.lineTo(geo.beamX, geo.beamY);
+    ctx.stroke();
+
+    ctx.fillStyle = '#ddd6fe';
+    ctx.beginPath();
+    ctx.arc(geo.beamX, geo.beamY, geo.beamWidth * 0.6, 0, Math.PI * 2);
+    ctx.fill();
+
     ctx.strokeStyle = '#c4b5fd';
-    ctx.lineWidth = 10;
+    ctx.lineWidth = geo.beamWidth;
     ctx.beginPath();
-    ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    ctx.moveTo(geo.beamX, geo.beamY); ctx.lineTo(geo.leftEnd.x, geo.leftEnd.y);
+    ctx.moveTo(geo.beamX, geo.beamY); ctx.lineTo(geo.rightEnd.x, geo.rightEnd.y);
+    ctx.stroke();
+
     ctx.strokeStyle = '#ede9fe';
-    ctx.lineWidth = 4;
+    ctx.lineWidth = Math.max(3, geo.beamWidth * 0.35);
     ctx.beginPath();
-    ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    ctx.moveTo(geo.beamX, geo.beamY); ctx.lineTo(geo.leftEnd.x, geo.leftEnd.y);
+    ctx.moveTo(geo.beamX, geo.beamY); ctx.lineTo(geo.rightEnd.x, geo.rightEnd.y);
+    ctx.stroke();
   }
 }
 
