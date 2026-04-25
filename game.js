@@ -191,7 +191,7 @@ function pickHeartRowsPerCycle() {
 }
 
 const FUSION_DEFS = [
-  { id: 'disease', pair: ['triangle', 'vlaser'], name: '바이러스' },
+  { id: 'disease', pair: ['triangle', 'vlaser'], name: '질병' },
   { id: 'missile', pair: ['triangle', 'hlaser'], name: '미사일' },
   { id: 'fshield', pair: ['triangle', 'long'], name: '실드' },
   { id: 'nuclear', pair: ['long', 'vlaser'], name: '핵융합' },
@@ -312,7 +312,7 @@ function activateDiseaseHost(host) {
   host.disease = true;
   state.diseaseArmed = false;
   state.diseaseBallUid = host.uid;
-  addFloatingText('바이러스 공', host.x, host.y - 12, '#86efac', 14);
+  addFloatingText('질병 공', host.x, host.y - 12, '#86efac', 14);
   return true;
 }
 function armOrActivateDisease() {
@@ -923,7 +923,7 @@ function showStatusOverlay() {
       <div class="kv"><span>세로 번개</span><strong>Lv.${state.itemLevels.vlaser}</strong></div>
       <div class="kv"><span>가로 번개</span><strong>Lv.${state.itemLevels.hlaser}</strong></div>
       <div class="kv"><span>융합 상태</span><strong>${mainFusionText().replace('융합: ', '')}</strong></div>
-      <div class="kv"><span>바이러스</span><strong>Lv.${state.fusionLevels.disease}</strong></div>
+      <div class="kv"><span>질병</span><strong>Lv.${state.fusionLevels.disease}</strong></div>
       <div class="kv"><span>미사일</span><strong>Lv.${state.fusionLevels.missile}</strong></div>
       <div class="kv"><span>융합 실드</span><strong>Lv.${state.fusionLevels.fshield}</strong></div>
       <div class="kv"><span>핵융합</span><strong>Lv.${state.fusionLevels.nuclear}</strong></div>
@@ -1095,6 +1095,11 @@ function updateBossDebuffs() {
     if (d.x - d.size <= 0) { d.x = d.size; d.vx = Math.abs(d.vx || 0.4); }
     if (d.x + d.size >= W) { d.x = W - d.size; d.vx = -Math.abs(d.vx || 0.4); }
   }
+
+  // While the barrier pulse is visible, remove any debuff that grazes it.
+  // This catches debuffs that enter the pulse shortly after it fires.
+  clearDebuffsWithActiveBarrierPulses();
+
   debuffs = debuffs.filter((d) => {
     const caught = d.y + d.size >= paddle.y && d.y - d.size <= paddle.y + paddle.height && d.x >= paddle.x && d.x <= paddle.x + paddle.width;
     if (caught) {
@@ -1338,6 +1343,41 @@ function fireNuclearBeam() {
   });
 }
 
+function clearDebuffsByBarrierSegments(segments, labelX, labelY) {
+  if (!debuffs.length || !segments.length) return 0;
+
+  let blocked = 0;
+  debuffs = debuffs.filter((d) => {
+    const hitBarrier = segments.some(([x1, y1, x2, y2, width]) => {
+      const beamRadius = (width || 10) / 2;
+      // R9 update step 1: make barrier-pulse debuff removal forgiving.
+      // A debuff is removed when its outer glow merely grazes the barrier pulse,
+      // not only when its center is deep inside the beam.
+      const grazeRadius = beamRadius + d.size * 1.35 + 12;
+      return pointToSegmentDistance(d.x, d.y, x1, y1, x2, y2) <= grazeRadius;
+    });
+    if (hitBarrier) {
+      blocked += 1;
+      addParticles(d.x, d.y, d.debuffType === 'fusion' ? '#7c3aed' : '#c084fc', 16, 3.2);
+      return false;
+    }
+    return true;
+  });
+
+  if (blocked > 0) addFloatingText(`장벽 방어 x${blocked}`, labelX, labelY - 10, '#93c5fd', 14);
+  return blocked;
+}
+
+function clearDebuffsWithActiveBarrierPulses() {
+  const now = nowMs();
+  const barrierSegments = state.beams
+    .filter((beam) => beam.type === 'barrier' && beam.until > now && beam.x1 != null)
+    .map((beam) => [beam.x1, beam.y1, beam.x2, beam.y2, beam.width || 10]);
+  if (!barrierSegments.length) return 0;
+  const first = barrierSegments[0];
+  return clearDebuffsByBarrierSegments(barrierSegments, first[0], first[1]);
+}
+
 function updateBarrier(dt) {
   if (state.fusionLevels.barrier <= 0) return;
   const now = nowMs();
@@ -1351,6 +1391,7 @@ function updateBarrier(dt) {
     [geo.beamX, geo.beamY, geo.leftEnd.x, geo.leftEnd.y],
     [geo.beamX, geo.beamY, geo.rightEnd.x, geo.rightEnd.y],
   ];
+  const debuffSegments = beamSegments.map(([x1, y1, x2, y2]) => [x1, y1, x2, y2, geo.beamWidth]);
   const beamRadius = geo.beamWidth / 2;
   const duration = barrierDurationMs();
   state.beams.push({ type: 'barrier', x1: geo.beamX, y1: geo.beamY, x2: geo.leftEnd.x, y2: geo.leftEnd.y, width: geo.beamWidth, startedAt: now, until: now + duration, color: '#c4b5fd' });
@@ -1364,17 +1405,7 @@ function updateBarrier(dt) {
     if (hit) damageBrick(brick, dmg, true);
   });
 
-  let blocked = 0;
-  debuffs = debuffs.filter((d) => {
-    const hitBarrier = beamSegments.some(([x1, y1, x2, y2]) => pointToSegmentDistance(d.x, d.y, x1, y1, x2, y2) <= beamRadius + d.size * 1.4);
-    if (hitBarrier) {
-      blocked += 1;
-      addParticles(d.x, d.y, d.debuffType === 'fusion' ? '#7c3aed' : '#c084fc', 12, 2.8);
-      return false;
-    }
-    return true;
-  });
-  if (blocked > 0) addFloatingText(`장벽 방어 x${blocked}`, geo.beamX, geo.beamY - 10, '#93c5fd', 14);
+  clearDebuffsByBarrierSegments(debuffSegments, geo.beamX, geo.beamY);
 }
 
 function maybeClearDiseaseBall() {
@@ -1752,6 +1783,7 @@ function updateItems() {
     if (item.x + item.size >= W) { item.x = W - item.size; item.vx = -Math.abs(item.vx || 0.35); }
     item.wobble = (item.wobble || 0) + 0.08;
     item.x += Math.sin(item.wobble) * 0.25;
+    item.rotation = (item.rotation || 0) + (item.spin || 0);
   }
   items = items.filter((item) => {
     const canCollect = now >= (item.collectAfter || 0);
@@ -1845,33 +1877,14 @@ function drawBackground() {
   const t = theme();
   const grad = ctx.createLinearGradient(0, 0, 0, H);
   grad.addColorStop(0, t.top);
-  grad.addColorStop(0.55, '#07111f');
   grad.addColorStop(1, t.bottom);
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, W, H);
-
-  for (let i = 0; i < 60; i += 1) {
-    const x = (i * 53) % W;
-    const y = (i * 97) % H;
-    const r = i % 8 === 0 ? 1.8 : 0.9;
-    ctx.globalAlpha = i % 8 === 0 ? 0.9 : 0.45;
-    ctx.fillStyle = i % 5 === 0 ? '#93c5fd' : '#ffffff';
-    ctx.fillRect(x, y, r, r);
-  }
-  ctx.globalAlpha = 1;
-
-  ctx.strokeStyle = 'rgba(96,165,250,0.07)';
-  for (let y = 0; y < H; y += 28) {
+  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  for (let y = 0; y < H; y += 24) {
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(W, y);
-    ctx.stroke();
-  }
-  ctx.strokeStyle = 'rgba(236,72,153,0.05)';
-  for (let x = 16; x < W; x += 42) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, H);
     ctx.stroke();
   }
 }
@@ -1892,148 +1905,50 @@ function roundRect(x, y, w, h, r, fill, stroke) {
   if (stroke) { ctx.strokeStyle = stroke; ctx.stroke(); }
 }
 
-function hexPath(cx, cy, rx, ry = rx) {
-  ctx.beginPath();
-  for (let i = 0; i < 6; i += 1) {
-    const a = -Math.PI / 2 + i * Math.PI / 3;
-    const x = cx + Math.cos(a) * rx;
-    const y = cy + Math.sin(a) * ry;
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  }
-  ctx.closePath();
-}
-
-function strokeGlow(color, width = 2, blur = 14, alpha = 1) {
-  ctx.save();
-  ctx.strokeStyle = color;
-  ctx.lineWidth = width;
-  ctx.shadowBlur = blur;
-  ctx.shadowColor = color;
-  ctx.globalAlpha = alpha;
-}
-
-function fillGlow(color, blur = 18, alpha = 1) {
-  ctx.save();
-  ctx.fillStyle = color;
-  ctx.shadowBlur = blur;
-  ctx.shadowColor = color;
-  ctx.globalAlpha = alpha;
-}
-
-function restoreGlow() { ctx.restore(); }
-
-function drawSciFiArrow(cx, cy, dir, color, outline = '#e2e8f0', scale = 1) {
-  ctx.save();
-  ctx.translate(cx, cy);
-  if (dir === 'right') ctx.rotate(Math.PI / 2);
-  if (dir === 'left') ctx.rotate(-Math.PI / 2);
-  if (dir === 'down') ctx.rotate(Math.PI);
-  const s = scale;
-  strokeGlow(color, 2.2, 14);
-  ctx.beginPath();
-  ctx.moveTo(0, -16 * s);
-  ctx.lineTo(-9 * s, -1 * s);
-  ctx.lineTo(-3 * s, -1 * s);
-  ctx.lineTo(-3 * s, 13 * s);
-  ctx.lineTo(3 * s, 13 * s);
-  ctx.lineTo(3 * s, -1 * s);
-  ctx.lineTo(9 * s, -1 * s);
-  ctx.closePath();
-  ctx.fillStyle = color;
-  ctx.fill();
-  ctx.strokeStyle = outline;
-  ctx.stroke();
-  restoreGlow();
-  ctx.restore();
-}
-
-function drawStar(cx, cy, spikes, outerR, innerR, color, outline='#fff') {
-  ctx.save();
-  ctx.translate(cx, cy);
-  let rot = Math.PI / 2 * 3;
-  let x = 0;
-  let y = 0;
-  const step = Math.PI / spikes;
-  ctx.beginPath();
-  ctx.moveTo(0, -outerR);
-  for (let i = 0; i < spikes; i += 1) {
-    x = Math.cos(rot) * outerR;
-    y = Math.sin(rot) * outerR;
-    ctx.lineTo(x, y);
-    rot += step;
-    x = Math.cos(rot) * innerR;
-    y = Math.sin(rot) * innerR;
-    ctx.lineTo(x, y);
-    rot += step;
-  }
-  ctx.lineTo(0, -outerR);
-  ctx.closePath();
-  fillGlow(color, 16);
-  ctx.fillStyle = color;
-  ctx.fill();
-  ctx.strokeStyle = outline;
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  restoreGlow();
-  ctx.restore();
-}
-
 function drawBricks() {
   const t = theme();
   for (const brick of bricks) {
     if (brick.destroyed) continue;
     if (brick.type === 'boss') {
-      const bg = ctx.createLinearGradient(brick.x, brick.y, brick.x, brick.y + brick.height);
-      bg.addColorStop(0, '#7f1d1d');
-      bg.addColorStop(0.5, t.boss);
-      bg.addColorStop(1, '#581c87');
-      fillGlow('#fb7185', 18, 0.9);
-      roundRect(brick.x, brick.y, brick.width, brick.height, 16, bg, 'rgba(255,255,255,0.32)');
-      restoreGlow();
-      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-      ctx.lineWidth = 2;
-      roundRect(brick.x + 6, brick.y + 6, brick.width - 12, brick.height - 12, 12, null, 'rgba(255,255,255,0.22)');
-      drawStar(brick.x + brick.width / 2, brick.y + brick.height / 2, 6, 18, 8, '#ffd6f4', '#fff');
+      roundRect(brick.x, brick.y, brick.width, brick.height, 14, t.boss, 'rgba(255,255,255,0.25)');
       ctx.fillStyle = '#fff';
-      ctx.font = 'bold 16px sans-serif';
+      ctx.font = 'bold 18px sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(`BOSS ${Math.ceil(brick.hp)}`, brick.x + brick.width / 2, brick.y + brick.height / 2 + 34);
+      ctx.fillText(`BOSS ${Math.ceil(brick.hp)}`, brick.x + brick.width / 2, brick.y + brick.height / 2 + 6);
       continue;
     }
-
-    let c1 = t.block;
-    let c2 = '#1f2937';
-    let edge = 'rgba(255,255,255,0.18)';
-    if (brick.type === 'number') { c1 = '#0ea5e9'; c2 = '#312e81'; edge = 'rgba(186,230,253,0.65)'; }
-    if (brick.type === 'elite') { c1 = '#f59e0b'; c2 = '#7c2d12'; edge = 'rgba(253,230,138,0.8)'; }
-    if (brick.type === 'heart') { c1 = '#fb7185'; c2 = '#7f1d1d'; edge = 'rgba(255,255,255,0.65)'; }
-    const grad = ctx.createLinearGradient(brick.x, brick.y, brick.x, brick.y + brick.height);
-    grad.addColorStop(0, c1);
-    grad.addColorStop(1, c2);
-    fillGlow(c1, brick.type === 'heart' ? 18 : 10, brick.type === 'heart' ? 0.95 : 0.85);
-    roundRect(brick.x, brick.y, brick.width, brick.height, 7, grad, edge);
-    restoreGlow();
-    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
-    ctx.lineWidth = 1.2;
-    roundRect(brick.x + 3, brick.y + 3, brick.width - 6, brick.height - 6, 5, null, 'rgba(255,255,255,0.12)');
-
-    if (brick.diseaseDps) {
+    let fill = t.block;
+    let stroke = 'rgba(255,255,255,0.12)';
+    if (brick.type === 'number') fill = t.number;
+    if (brick.type === 'elite') fill = '#f59e0b';
+    if (brick.type === 'heart') {
+      const pulse = 0.86 + Math.sin(nowMs() / 180) * 0.14;
       ctx.save();
-      ctx.globalAlpha = 0.2;
-      fillGlow('#22c55e', 18, 0.75);
-      roundRect(brick.x + 1, brick.y + 1, brick.width - 2, brick.height - 2, 7, '#22c55e', null);
-      restoreGlow();
+      ctx.globalAlpha = pulse;
+      fill = '#fb7185';
+      roundRect(brick.x, brick.y, brick.width, brick.height, 6, fill, 'rgba(255,255,255,0.4)');
       ctx.restore();
+      ctx.save();
+      ctx.strokeStyle = 'rgba(253,164,175,0.45)';
+      ctx.lineWidth = 4;
+      roundRect(brick.x - 1, brick.y - 1, brick.width + 2, brick.height + 2, 7, null, 'rgba(253,164,175,0.45)');
+      ctx.restore();
+    } else {
+      roundRect(brick.x, brick.y, brick.width, brick.height, 6, fill, stroke);
+      if (brick.diseaseDps) {
+        ctx.save();
+        ctx.globalAlpha = 0.22;
+        roundRect(brick.x, brick.y, brick.width, brick.height, 6, '#22c55e', null);
+        ctx.restore();
+      }
     }
-
     ctx.textAlign = 'center';
     if (brick.type === 'heart') {
-      drawStar(brick.x + brick.width / 2, brick.y + brick.height / 2 + 1, 4, 10, 5, '#ffe4ef', '#fff');
       ctx.fillStyle = '#fff';
-      ctx.font = 'bold 13px sans-serif';
+      ctx.font = 'bold 14px sans-serif';
       ctx.fillText('♥', brick.x + brick.width / 2, brick.y + brick.height / 2 + 5);
     } else if (brick.type === 'number' || brick.type === 'elite') {
-      ctx.fillStyle = '#f8fafc';
+      ctx.fillStyle = '#111827';
       ctx.font = 'bold 13px sans-serif';
       ctx.fillText(String(Math.ceil(brick.hp)), brick.x + brick.width / 2, brick.y + brick.height / 2 + 5);
     }
@@ -2042,103 +1957,86 @@ function drawBricks() {
 
 function drawItems() {
   for (const item of items) {
-    const pulse = 0.95 + Math.sin(nowMs() / 180 + item.x) * 0.05;
+    const pulse = 0.92 + Math.sin(nowMs() / 150 + item.x) * 0.08;
     ctx.save();
     ctx.translate(item.x, item.y);
+    ctx.rotate(item.rotation || 0);
     ctx.scale(pulse, pulse);
+    ctx.strokeStyle = '#ffffff';
+    ctx.fillStyle = theme().accent;
+    ctx.lineWidth = 2.5;
 
-    fillGlow('rgba(59,130,246,0.25)', 22, 0.95);
     ctx.beginPath();
-    ctx.arc(0, 0, item.size + 2, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(7,17,31,0.72)';
+    ctx.arc(0, 0, item.size, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(15,23,42,0.72)';
     ctx.fill();
-    restoreGlow();
-    strokeGlow('#93c5fd', 2.2, 16);
-    ctx.beginPath();
-    ctx.arc(0, 0, item.size + 1.5, 0, Math.PI * 2);
+    ctx.strokeStyle = theme().accent;
     ctx.stroke();
-    restoreGlow();
 
+    ctx.strokeStyle = '#ffffff';
+    ctx.fillStyle = theme().accent;
     if (item.type === 'triangle') {
-      drawStar(0, 0, 3, 15, 7, '#ec4899', '#fde68a');
+      ctx.beginPath();
+      ctx.moveTo(0, -14);
+      ctx.lineTo(-13, 10);
+      ctx.lineTo(13, 10);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
     } else if (item.type === 'long') {
-      const grad = ctx.createLinearGradient(-24, 0, 24, 0);
-      grad.addColorStop(0, '#0ea5e9'); grad.addColorStop(1, '#38bdf8');
-      fillGlow('#38bdf8', 16);
-      roundRect(-24, -7, 48, 14, 7, grad, '#e0f2fe');
-      restoreGlow();
-      ctx.fillStyle = '#0f172a';
-      roundRect(-16, -2, 32, 4, 2, 'rgba(224,242,254,0.75)', null);
+      roundRect(-22, -6, 44, 12, 6, theme().accent, '#ffffff');
     } else if (item.type === 'vlaser') {
-      drawSciFiArrow(0, 0, 'up', '#38bdf8', '#e0f2fe', 1);
+      ctx.beginPath();
+      ctx.moveTo(0, -16);
+      ctx.lineTo(-6, -2);
+      ctx.lineTo(1, -2);
+      ctx.lineTo(-5, 16);
+      ctx.lineTo(7, 1);
+      ctx.lineTo(0, 1);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
     } else if (item.type === 'hlaser') {
-      drawSciFiArrow(0, 0, 'right', '#f472b6', '#fdf2f8', 1);
+      ctx.rotate(Math.PI / 2);
+      ctx.beginPath();
+      ctx.moveTo(0, -16);
+      ctx.lineTo(-6, -2);
+      ctx.lineTo(1, -2);
+      ctx.lineTo(-5, 16);
+      ctx.lineTo(7, 1);
+      ctx.lineTo(0, 1);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
     } else if (item.type === 'disease') {
-      drawStar(0, 0, 8, 13, 8, '#22c55e', '#dcfce7');
-      for (let i = 0; i < 6; i += 1) {
-        const a = i * Math.PI / 3;
-        ctx.strokeStyle = '#bbf7d0';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(Math.cos(a) * 11, Math.sin(a) * 11);
-        ctx.lineTo(Math.cos(a) * 18, Math.sin(a) * 18);
-        ctx.stroke();
-      }
+      ctx.fillStyle = '#22c55e';
+      ctx.beginPath(); ctx.arc(0,0,12,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle = '#bbf7d0'; ctx.stroke();
+      for (let i=0;i<4;i++){ const a=i*Math.PI/2; ctx.beginPath(); ctx.moveTo(Math.cos(a)*12, Math.sin(a)*12); ctx.lineTo(Math.cos(a)*17, Math.sin(a)*17); ctx.stroke(); }
     } else if (item.type === 'missile') {
-      fillGlow('#60a5fa', 16);
-      ctx.fillStyle = '#60a5fa';
-      ctx.beginPath(); ctx.moveTo(-22,0); ctx.lineTo(-8,-7); ctx.lineTo(-8,7); ctx.closePath(); ctx.fill();
-      ctx.beginPath(); ctx.moveTo(22,0); ctx.lineTo(8,-7); ctx.lineTo(8,7); ctx.closePath(); ctx.fill();
-      roundRect(-8, -5, 16, 10, 4, '#38bdf8', '#e0f2fe');
-      restoreGlow();
+      roundRect(-18,-4,36,8,4,'#38bdf8','#ffffff');
+      ctx.beginPath(); ctx.moveTo(-20,0); ctx.lineTo(-10,-8); ctx.lineTo(-10,8); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(20,0); ctx.lineTo(10,-8); ctx.lineTo(10,8); ctx.closePath(); ctx.fill();
     } else if (item.type === 'fshield') {
-      hexPath(0, 0, 14, 16);
-      fillGlow('#60a5fa', 18);
-      ctx.fillStyle = '#60a5fa'; ctx.fill();
-      ctx.strokeStyle = '#dbeafe'; ctx.lineWidth = 2; ctx.stroke();
-      restoreGlow();
-      ctx.strokeStyle = '#dbeafe'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(0,-9); ctx.lineTo(8,-3); ctx.lineTo(5,10); ctx.lineTo(-5,10); ctx.lineTo(-8,-3); ctx.closePath(); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0,-16); ctx.lineTo(13,-8); ctx.lineTo(9,12); ctx.lineTo(0,17); ctx.lineTo(-9,12); ctx.lineTo(-13,-8); ctx.closePath(); ctx.fill(); ctx.stroke();
     } else if (item.type === 'nuclear') {
-      fillGlow('#a78bfa', 18);
-      roundRect(-7, -18, 14, 36, 5, '#8b5cf6', '#ede9fe');
-      ctx.fillStyle = '#fef3c7'; ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI*2); ctx.fill();
-      restoreGlow();
+      roundRect(-6,-18,12,36,4,'#60a5fa','#ffffff');
     } else if (item.type === 'barrier') {
-      fillGlow('#22d3ee', 16);
-      ctx.strokeStyle = '#a5f3fc'; ctx.lineWidth = 2.4;
-      ctx.beginPath(); ctx.moveTo(0, -18); ctx.lineTo(0, -4); ctx.stroke();
-      ctx.beginPath(); ctx.arc(0, -2, 4.5, 0, Math.PI*2); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(0, -2); ctx.lineTo(-18, -10); ctx.moveTo(0, -2); ctx.lineTo(18, -10); ctx.stroke();
-      restoreGlow();
+      roundRect(-24,-5,48,10,5,'#a78bfa','#ffffff');
     } else if (item.type === 'laserboost') {
-      drawSciFiArrow(0, 0, 'up', '#38bdf8', '#e0f2fe', 0.72);
-      drawSciFiArrow(0, 0, 'right', '#f472b6', '#fdf2f8', 0.72);
-      ctx.beginPath(); ctx.arc(0,0,4.5,0,Math.PI*2); ctx.fillStyle='#fff'; ctx.fill();
+      roundRect(-4,-18,8,36,4,'#f472b6','#ffffff');
+      roundRect(-18,-4,36,8,4,'#f472b6','#ffffff');
     }
     ctx.restore();
   }
 }
 
 function drawPaddle() {
-  const body = ctx.createLinearGradient(paddle.x, paddle.y, paddle.x, paddle.y + paddle.height);
-  body.addColorStop(0, '#dbeafe');
-  body.addColorStop(0.5, '#93c5fd');
-  body.addColorStop(1, '#1d4ed8');
-  fillGlow('#60a5fa', 18, 0.9);
-  roundRect(paddle.x, paddle.y, paddle.width, paddle.height, 8, body, '#eff6ff');
-  restoreGlow();
-  roundRect(paddle.x + 6, paddle.y + 3, paddle.width - 12, Math.max(3, paddle.height - 8), 4, 'rgba(255,255,255,0.22)', null);
-  ctx.strokeStyle = 'rgba(15,23,42,0.45)';
-  ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(paddle.x + 12, paddle.y + paddle.height / 2); ctx.lineTo(paddle.x + paddle.width - 12, paddle.y + paddle.height / 2); ctx.stroke();
-
+  roundRect(paddle.x, paddle.y, paddle.width, paddle.height, 7, '#ffffff', null);
   if (shieldCount() > 0) {
     ctx.save();
-    ctx.globalAlpha = 0.24;
-    fillGlow('#60a5fa', 20);
-    roundRect(paddle.x - 4, paddle.y - 6, paddle.width + 8, paddle.height + 12, 12, '#60a5fa', '#bfdbfe');
-    restoreGlow();
+    ctx.globalAlpha = 0.28;
+    roundRect(paddle.x - 3, paddle.y - 5, paddle.width + 6, paddle.height + 10, 10, '#60a5fa', '#bfdbfe');
     ctx.restore();
     ctx.fillStyle = '#dbeafe';
     ctx.font = 'bold 12px sans-serif';
@@ -2146,60 +2044,50 @@ function drawPaddle() {
     ctx.fillText(`x${shieldCount()}`, paddle.x + paddle.width / 2, paddle.y - 8);
   }
   if (state.itemLevels.triangle > 0) {
-    const apexX = paddle.x + paddle.width / 2;
-    const apexY = paddle.y - 26;
-    fillGlow('#ec4899', 16, 0.95);
-    ctx.fillStyle = '#ec4899';
+    ctx.fillStyle = theme().accent;
     ctx.beginPath();
-    ctx.moveTo(apexX, apexY);
-    ctx.lineTo(apexX - 20, paddle.y + 1);
-    ctx.lineTo(apexX + 20, paddle.y + 1);
+    ctx.moveTo(paddle.x + paddle.width / 2, paddle.y - 24);
+    ctx.lineTo(paddle.x + paddle.width / 2 - 18, paddle.y);
+    ctx.lineTo(paddle.x + paddle.width / 2 + 18, paddle.y);
     ctx.closePath();
     ctx.fill();
-    ctx.strokeStyle = '#fde68a';
-    ctx.lineWidth = 2.2;
-    ctx.stroke();
-    restoreGlow();
     if (state.fusionLevels.missile > 0) {
       ctx.fillStyle = '#38bdf8';
-      const leftX = paddle.x + 8;
-      const rightX = paddle.x + paddle.width - 8;
-      drawSciFiArrow(leftX, paddle.y - 13, 'up', '#38bdf8', '#e0f2fe', 0.6);
-      drawSciFiArrow(rightX, paddle.y - 13, 'up', '#38bdf8', '#e0f2fe', 0.6);
+      const inset = Math.min(12, paddle.width * 0.08);
+      roundRect(paddle.x + inset - 5, paddle.y - 19, 10, 20, 3, '#38bdf8', null);
+      roundRect(paddle.x + paddle.width - inset - 5, paddle.y - 19, 10, 20, 3, '#38bdf8', null);
     }
   }
 }
 
 function drawBalls() {
   balls.forEach((ball) => {
-    const glow = ball.disease ? '#22c55e' : (ball.r >= BALL_RADIUS * 2 - 0.1 ? '#60a5fa' : '#fbbf24');
-    fillGlow(glow, ball.disease ? 18 : 12, 0.95);
     ctx.beginPath();
     ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
-    const grad = ctx.createRadialGradient(ball.x - ball.r * 0.35, ball.y - ball.r * 0.45, 1, ball.x, ball.y, ball.r);
-    if (ball.disease) {
-      grad.addColorStop(0, '#dcfce7'); grad.addColorStop(0.45, '#4ade80'); grad.addColorStop(1, '#166534');
-    } else if (ball.r >= BALL_RADIUS * 3 - 0.1) {
-      grad.addColorStop(0, '#dbeafe'); grad.addColorStop(0.45, '#60a5fa'); grad.addColorStop(1, '#1d4ed8');
-    } else if (ball.r >= BALL_RADIUS * 2 - 0.1) {
-      grad.addColorStop(0, '#e0f2fe'); grad.addColorStop(0.45, '#93c5fd'); grad.addColorStop(1, '#2563eb');
-    } else {
-      grad.addColorStop(0, '#fef3c7'); grad.addColorStop(0.45, '#fbbf24'); grad.addColorStop(1, '#b45309');
-    }
-    ctx.fillStyle = grad;
+    ctx.fillStyle = '#fbbf24';
     ctx.fill();
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = ball.disease ? 2.5 : 1.6;
-    ctx.stroke();
-    restoreGlow();
+    if (ball.disease) {
+      ctx.fillStyle = '#22c55e';
+      ctx.fill();
+      ctx.strokeStyle = '#86efac';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    } else if (ball.r >= BALL_RADIUS * 3 - 0.1) {
+      ctx.strokeStyle = '#60a5fa';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    } else if (ball.r >= BALL_RADIUS * 2 - 0.1) {
+      ctx.strokeStyle = '#93c5fd';
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+    }
   });
 }
 
 function drawDrones() {
   const leftPower = dronePower('left');
   const rightPower = dronePower('right');
-  const drawTriDrone = (cx, cy, fill) => {
-    fillGlow(fill, 14, 0.92);
+  const drawTriDrone = (cx, cy, fill, label) => {
     ctx.fillStyle = fill;
     ctx.beginPath();
     ctx.moveTo(cx, cy - 9);
@@ -2207,30 +2095,23 @@ function drawDrones() {
     ctx.lineTo(cx + 8, cy + 7);
     ctx.closePath();
     ctx.fill();
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 1.8;
-    ctx.stroke();
-    restoreGlow();
-    ctx.beginPath(); ctx.arc(cx, cy + 1, 2.2, 0, Math.PI*2); ctx.fillStyle = '#fff'; ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 9px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, cx, cy + 3);
   };
-  if (leftPower > 0) drawTriDrone(paddle.x + paddle.width / 2 - 24, paddle.y - 20, '#fb7185');
-  if (rightPower > 0) drawTriDrone(paddle.x + paddle.width / 2 + 24, paddle.y - 20, '#f9a8d4');
+  if (leftPower > 0) drawTriDrone(paddle.x + paddle.width / 2 - 24, paddle.y - 20, '#fb7185', '▲');
+  if (rightPower > 0) drawTriDrone(paddle.x + paddle.width / 2 + 24, paddle.y - 20, '#f9a8d4', '▲');
 }
 
 function drawMissiles() {
   state.missiles.forEach((m) => {
-    const tailX = m.x - m.vx * 2.3;
-    const tailY = m.y - m.vy * 2.3;
-    strokeGlow(m.color, 2.4, 12);
+    ctx.strokeStyle = m.color;
+    ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(m.x, m.y);
-    ctx.lineTo(tailX, tailY);
+    ctx.lineTo(m.x - m.vx * 2, m.y - m.vy * 2);
     ctx.stroke();
-    restoreGlow();
-    ctx.beginPath();
-    ctx.arc(m.x, m.y, 2.2, 0, Math.PI * 2);
-    ctx.fillStyle = '#fff';
-    ctx.fill();
   });
 }
 
@@ -2239,8 +2120,20 @@ function drawBeams() {
   const now = nowMs();
   state.beams.forEach((beam) => {
     const progress = clamp((now - (beam.startedAt || now)) / Math.max(1, (beam.until - (beam.startedAt || now))), 0, 1);
+    const beamLineWidth = beam.width || (beam.type === 'nuclear' ? 16 : 4);
+    if (beam.type === 'barrier') {
+      ctx.strokeStyle = beam.color;
+      ctx.lineWidth = beamLineWidth + 20;
+      ctx.globalAlpha = 0.16;
+      ctx.beginPath();
+      const glowEx = beam.x1 + (beam.x2 - beam.x1) * progress;
+      const glowEy = beam.y1 + (beam.y2 - beam.y1) * progress;
+      ctx.moveTo(beam.x1, beam.y1);
+      ctx.lineTo(glowEx, glowEy);
+      ctx.stroke();
+    }
     ctx.strokeStyle = beam.color;
-    ctx.lineWidth = beam.width || (beam.type === 'nuclear' ? 16 : 4);
+    ctx.lineWidth = beamLineWidth;
     ctx.globalAlpha = beam.type === 'nuclear' ? 0.92 : 0.78;
     ctx.beginPath();
     if (beam.x1 != null) {
@@ -2263,23 +2156,17 @@ function drawBeams() {
   });
   if (state.fusionLevels.barrier > 0) {
     const geo = getBarrierGeometry();
-    strokeGlow('#22d3ee', geo.pillarWidth, 18, 0.85);
+    ctx.strokeStyle = '#a78bfa';
+    ctx.lineWidth = geo.pillarWidth;
     ctx.beginPath();
     ctx.moveTo(geo.baseX, geo.baseY);
     ctx.lineTo(geo.beamX, geo.beamY);
     ctx.stroke();
-    restoreGlow();
 
-    fillGlow('#a5f3fc', 18, 0.95);
+    ctx.fillStyle = '#ddd6fe';
     ctx.beginPath();
-    ctx.arc(geo.beamX, geo.beamY, geo.beamWidth * 0.62, 0, Math.PI * 2);
+    ctx.arc(geo.beamX, geo.beamY, geo.beamWidth * 0.6, 0, Math.PI * 2);
     ctx.fill();
-    restoreGlow();
-    ctx.strokeStyle = '#ecfeff';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(geo.beamX, geo.beamY, geo.beamWidth * 0.42, 0, Math.PI * 2);
-    ctx.stroke();
   }
 }
 
@@ -2319,34 +2206,42 @@ function drawDebuffs() {
   debuffs.forEach((d) => {
     ctx.save();
     ctx.translate(d.x, d.y);
-    const pulse = 1 + Math.sin(nowMs() / 140 + d.x) * 0.08;
+    ctx.rotate(d.rot || 0);
+    const pulse = 1 + Math.sin(nowMs() / 120 + d.x) * 0.08;
     ctx.scale(pulse, pulse);
-    const fill = d.debuffType === 'fusion' ? '#7c3aed' : '#a855f7';
-    const edge = d.debuffType === 'fusion' ? '#c4b5fd' : '#f0abfc';
-    fillGlow(fill, 18, 0.95);
-    hexPath(0, 0, d.size, d.size * 1.05);
-    ctx.fillStyle = fill;
+    ctx.fillStyle = d.debuffType === 'fusion' ? '#7c3aed' : '#a855f7';
+    ctx.strokeStyle = d.debuffType === 'fusion' ? '#c4b5fd' : '#f0abfc';
+    ctx.lineWidth = 2.5;
+
+    ctx.beginPath();
+    for (let i = 0; i < 6; i += 1) {
+      const ang = Math.PI / 3 * i - Math.PI / 6;
+      const rr = d.size * (i === 2 ? 0.72 : 1);
+      const px = Math.cos(ang) * rr;
+      const py = Math.sin(ang) * rr;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
     ctx.fill();
-    ctx.strokeStyle = edge;
-    ctx.lineWidth = 2.4;
     ctx.stroke();
-    restoreGlow();
+
     ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2.1;
+    ctx.lineWidth = 2.2;
     ctx.beginPath();
     if (d.debuffType === 'fusion') {
-      ctx.moveTo(-d.size * 0.26, -d.size * 0.26);
-      ctx.lineTo(d.size * 0.26, d.size * 0.26);
-      ctx.moveTo(d.size * 0.26, -d.size * 0.26);
-      ctx.lineTo(-d.size * 0.26, d.size * 0.26);
+      ctx.moveTo(-d.size * 0.24, -d.size * 0.24);
+      ctx.lineTo(d.size * 0.24, d.size * 0.24);
+      ctx.moveTo(d.size * 0.24, -d.size * 0.24);
+      ctx.lineTo(-d.size * 0.24, d.size * 0.24);
     } else {
-      ctx.moveTo(0, -d.size * 0.36);
-      ctx.lineTo(0, d.size * 0.12);
-      ctx.lineTo(-d.size * 0.24, -1);
-      ctx.moveTo(0, d.size * 0.12);
-      ctx.lineTo(d.size * 0.24, -1);
+      ctx.moveTo(0, -d.size * 0.35);
+      ctx.lineTo(0, d.size * 0.15);
+      ctx.lineTo(-d.size * 0.26, -0.5);
+      ctx.moveTo(0, d.size * 0.15);
+      ctx.lineTo(d.size * 0.26, -0.5);
     }
     ctx.stroke();
+
     ctx.restore();
   });
 }
